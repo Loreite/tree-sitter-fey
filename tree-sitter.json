@@ -1,0 +1,42 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "fey",
+      "camelcase": "Fey",
+      "title": "Fey",
+      "scope": "source.fey",
+      "file-types": [
+        "fey"
+      ],
+      "injection-regex": "^fey$",
+      "class-name": "TreeSitterFey"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "A parser for the configurable Fey markup language",
+    "authors": [
+      {
+        "name": "qaptoR",
+        "email": "git@arxdaingneachd.org",
+        "url": ""
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/Loreite/tree-sitter-fey",
+      "funding": ""
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "java": true,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": false,
+    "zig": true
+  }
+}
