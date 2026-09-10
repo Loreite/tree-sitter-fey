@@ -1,0 +1,30 @@
+============================
+simple hierarchical headings
+============================
+
+  I. Section 1
+
+text that is
+  I.a. Subsection 1
+more text
+  I.b. Subsection 2
+
+text that will be
+
+  ... 
+
+  text that almost
+
+ans also is
+
+
+  I.c.i. xAfe1
+test test test
+testtset
+
+terst est ets
+    testeste
+ setsetest
+        setsets
+
+
