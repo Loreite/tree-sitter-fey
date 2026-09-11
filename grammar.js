@@ -6,13 +6,13 @@
 
 /// <reference types="tree-sitter-cli/dsl" />
 // @ts-check
-//
-asciiSymbols = [
+
+const asciiSymbols = [
   '"', "'", '`',
   '\\', '/', '|', '_',
   '#', '$', '%', '&', '@',
   ',', '.', ':', ';', '!', '?',
-  '*', '+', '-', '=', '^', '~'
+  '*', '+', '-', '=', '^', '~',
   '(', ')', '[', ']', '{', '}', '<', '>',
 ]
 
@@ -22,22 +22,33 @@ export default grammar({
   extras: _ => [/[ \f\t\v\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]/],
 
   externals: $ => [
-    $._line_content,
-    // $._list_start,
-    // $._list_end,
-    // $._listitem_end,
-    // $.bullet,
-    // $._signature,
-    $._section_start,
+    $._list_start,
+    $._list_end,
+    $._listitem_end,
+    $.bullet,
+    $._signature,
     $._section_end,
-
     $._eof,  // Basically just '\0', but allows multiple to be matched
+  ],
+
+
+  inline: $ => [
+    // $._nl,
+    $._eol,
+    // $._ts_contents,
+    // $._directive_list,
+    $._body_contents,
+  ],
+
+  precedences: _ => [
+    // ['document_directive', 'body_directive'],
+    ['special', 'immediate', 'non-immediate'],
   ],
 
   rules: {
     document: $ => seq(
       optional(field('body', $.body)),
-      repeat(field('subsection'), $.section),
+      repeat(field('subsection', $.section)),
     ),
 
     body: $ => $._body_contents,
@@ -75,14 +86,13 @@ export default grammar({
 
     _element: $ => choice(
       // $.comment,
-      // $.list,
+      $.list,
       // $.tag,
       // $.table,
       // $.block
     ),
 
     section: $ => seq(
-      $._section_start,
       field('heading', $.heading),
       // optional(field('metadata', $.metadata)),
       optional(field('body', $.body)),
@@ -99,10 +109,11 @@ export default grammar({
     ),
 
     signature: $ => seq(
-      $._signature, '  ',
+      $._signature,
+      '  ',
       repeat1( seq(
         /[a-zA-Z0-9_]*/,
-        /[.,:;!?/\\'"`\-+*=~^@&#$%]/,
+        /[.,:;!?/\\'"`\-+*=~^%@&#$]/,
       )),
     ),
 
@@ -112,6 +123,22 @@ export default grammar({
     paragraph: $ => seq(
       // optional($._directive_list),
       $._multiline_text
+    ),
+
+    list: $ => seq(
+      // optional($._directive_list),
+      $._list_start,  // captures indent length and bullet type
+      repeat(seq($.listitem, $._listitem_end, repeat($._nl))),
+      seq($.listitem, $._list_end)
+    ),
+
+    listitem: $ => seq(
+      field('bullet', $.bullet),
+      // optional(field('checkbox', $.checkbox)),
+      choice(
+        $._eof,
+        field('contents', $._body_contents),
+      ),
     ),
 
     _multiline_text: $ => repeat1(
