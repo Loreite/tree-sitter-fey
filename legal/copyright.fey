@@ -81,7 +81,7 @@ Source: https://github.com/tree-sitter-fey/tree-sitter-fey
     [Pattern]   grammar.js, scanner.c
     [Comment]   nvim-orgmode/tree-sitter-org grammar framework
     [License]   MIT/Expat
-    [Copyright] Copyright (c) 2021-2022 Emilia Simmons
+    [Copyright] 2021-2022 Emilia Simmons
 
 [File]
     !This item is only here for template purposes for use in future!
