@@ -173,9 +173,24 @@
     }
   },
   {
-    "type": "signature",
+    "type": "segment",
     "named": true,
     "fields": {}
+  },
+  {
+    "type": "signature",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "segment",
+          "named": true
+        }
+      ]
+    }
   },
   {
     "type": "title",
@@ -311,6 +326,14 @@
   {
     "type": "bullet",
     "named": true
+  },
+  {
+    "type": "delim",
+    "named": false
+  },
+  {
+    "type": "index",
+    "named": false
   },
   {
     "type": "num",
