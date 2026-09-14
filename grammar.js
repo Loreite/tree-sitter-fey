@@ -111,10 +111,12 @@ export default grammar({
     signature: $ => seq(
       $._signature,
       '  ',
-      repeat1( seq(
-        /[a-zA-Z0-9_]*/,
-        /[.,:;!?/\\'"`\-+*=~^%@&#$]/,
-      )),
+      repeat1($.segment),
+    ),
+
+    segment: $ => seq(
+      alias(/[a-zA-Z0-9_]*/, 'index'),
+      alias(token.immediate(/[.,:;!?/\\'"`\-+*=~^%@&#$]/), 'delim'),
     ),
 
     // title: $ => seq(/[ \t]+/, /[^\r\n]*/),

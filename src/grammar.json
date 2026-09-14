@@ -262,18 +262,35 @@
         {
           "type": "REPEAT1",
           "content": {
-            "type": "SEQ",
-            "members": [
-              {
-                "type": "PATTERN",
-                "value": "[a-zA-Z0-9_]*"
-              },
-              {
-                "type": "PATTERN",
-                "value": "[.,:;!?/\\\\'\"`\\-+*=~^%@&#$]"
-              }
-            ]
+            "type": "SYMBOL",
+            "name": "segment"
           }
+        }
+      ]
+    },
+    "segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "PATTERN",
+            "value": "[a-zA-Z0-9_]*"
+          },
+          "named": false,
+          "value": "index"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "IMMEDIATE_TOKEN",
+            "content": {
+              "type": "PATTERN",
+              "value": "[.,:;!?/\\\\'\"`\\-+*=~^%@&#$]"
+            }
+          },
+          "named": false,
+          "value": "delim"
         }
       ]
     },
