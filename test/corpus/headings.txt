@@ -5,6 +5,14 @@ simple hierarchical headings
   I. Section 1
 
 text that is
+
+I. listitem
+-  listitem
+    1?  listitem
+        a#  listitem
+
+    2? listitem
+
   I.a. Subsection 1
 more text
   I.b. Subsection 2
@@ -14,6 +22,7 @@ text that will be
   ... 
 
   text that almost
+
 
 ans also is
 
