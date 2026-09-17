@@ -25,7 +25,8 @@ export default grammar({
     $._list_start,
     $._list_end,
     $._listitem_end,
-    $.bullet,
+    $._bullet,
+    $._two_spaces,
     $._signature,
     $._section_end,
     $._eof,  // Basically just '\0', but allows multiple to be matched
@@ -116,7 +117,7 @@ export default grammar({
 
     segment: $ => seq(
       alias(/[a-zA-Z0-9_]*/, 'index'),
-      alias(token.immediate(/[.,:;!?/\\'"`\-+*=~^%@&#$]/), 'delim'),
+      alias(token.immediate(/[.,:;!?/\\'"`\-+*=~^%@&#$\[\](){}<>]/), 'delim'),
     ),
 
     // title: $ => seq(/[ \t]+/, /[^\r\n]*/),
@@ -136,11 +137,17 @@ export default grammar({
 
     listitem: $ => seq(
       field('bullet', $.bullet),
+      $._two_spaces, /[ \t]{2,}/,
       // optional(field('checkbox', $.checkbox)),
       choice(
         $._eof,
         field('contents', $._body_contents),
       ),
+    ),
+
+    bullet: $ => seq(
+      $._bullet,
+      $.segment,
     ),
 
     _multiline_text: $ => repeat1(

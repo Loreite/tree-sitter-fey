@@ -286,7 +286,7 @@
             "type": "IMMEDIATE_TOKEN",
             "content": {
               "type": "PATTERN",
-              "value": "[.,:;!?/\\\\'\"`\\-+*=~^%@&#$]"
+              "value": "[.,:;!?/\\\\'\"`\\-+*=~^%@&#$\\[\\](){}<>]"
             }
           },
           "named": false,
@@ -367,6 +367,14 @@
           }
         },
         {
+          "type": "SYMBOL",
+          "name": "_two_spaces"
+        },
+        {
+          "type": "PATTERN",
+          "value": "[ \\t]{2,}"
+        },
+        {
           "type": "CHOICE",
           "members": [
             {
@@ -382,6 +390,19 @@
               }
             }
           ]
+        }
+      ]
+    },
+    "bullet": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "_bullet"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "segment"
         }
       ]
     },
@@ -1278,7 +1299,11 @@
     },
     {
       "type": "SYMBOL",
-      "name": "bullet"
+      "name": "_bullet"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_two_spaces"
     },
     {
       "type": "SYMBOL",
