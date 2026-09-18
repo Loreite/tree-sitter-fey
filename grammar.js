@@ -26,6 +26,9 @@ export default grammar({
     $._list_end,
     $._listitem_end,
     $._bullet,
+    // $._signature_segment,
+    // $._liststart_segment,
+    // $._bullet_segment,
     $._two_spaces,
     $._signature,
     $._section_end,
@@ -110,6 +113,7 @@ export default grammar({
     ),
 
     signature: $ => seq(
+      // $._signature_segment,
       $._signature,
       '  ',
       repeat1($.segment),
@@ -130,6 +134,7 @@ export default grammar({
 
     list: $ => seq(
       // optional($._directive_list),
+      // $._liststart_segment,
       $._list_start,  // captures indent length and bullet type
       repeat(seq($.listitem, $._listitem_end, repeat($._nl))),
       seq($.listitem, $._list_end)
@@ -146,6 +151,7 @@ export default grammar({
     ),
 
     bullet: $ => seq(
+      // $._bullet_segment,
       $._bullet,
       $.segment,
     ),
