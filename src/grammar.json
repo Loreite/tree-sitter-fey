@@ -253,6 +253,10 @@
       "members": [
         {
           "type": "SYMBOL",
+          "name": "_signature_segment"
+        },
+        {
+          "type": "SYMBOL",
           "name": "_signature"
         },
         {
@@ -313,6 +317,10 @@
     "list": {
       "type": "SEQ",
       "members": [
+        {
+          "type": "SYMBOL",
+          "name": "_liststart_segment"
+        },
         {
           "type": "SYMBOL",
           "name": "_list_start"
@@ -396,6 +404,10 @@
     "bullet": {
       "type": "SEQ",
       "members": [
+        {
+          "type": "SYMBOL",
+          "name": "_bullet_segment"
+        },
         {
           "type": "SYMBOL",
           "name": "_bullet"
@@ -1300,6 +1312,18 @@
     {
       "type": "SYMBOL",
       "name": "_bullet"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_signature_segment"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_liststart_segment"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_bullet_segment"
     },
     {
       "type": "SYMBOL",

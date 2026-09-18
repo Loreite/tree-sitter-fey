@@ -44,6 +44,11 @@ enum TokenType {
   LIST_END,
   LISTITEM_END,
   BULLET,
+
+  // SIG_SEGMENT,
+  // LISTSTART_SEGMENT,
+  // BULLET_SEGMENT,
+
   TWO_SPACES,
   SIGNATURE,
   SECTION_END,
@@ -180,6 +185,10 @@ static bool check_segment(TSLexer *lexer) {
   return (check_delimiter(lexer) || check_closure(lexer, true, true));
 }
 
+static bool istabspace(TSLexer *lexer) {
+  return (lexer->lookahead == ' ' || lexer->lookahead == '\t');
+}
+
 static bool indent_is_two_space_or_tab(int16_t indent_length) {
   return (indent_length == 2    //
           || indent_length == 9 //
@@ -205,12 +214,12 @@ Bullet getbullet(TSLexer *lexer, bool bullet) {
   if (bullet)
     return ISABULLET;
 
-  if (iswspace(lexer->lookahead)) {
+  if (istabspace(lexer)) {
     skip(lexer);
   } else
     return NOTABULLET;
 
-  if (iswspace(lexer->lookahead)) {
+  if (istabspace(lexer)) {
     return ISABULLET;
   }
 
@@ -251,13 +260,101 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     return true;
   }
 
+  // if ((valid_symbols[SIG_SEGMENT]           //
+  //      || valid_symbols[BULLET_SEGMENT]     //
+  //      || valid_symbols[LISTSTART_SEGMENT]) //
+  //     && !(valid_symbols[SIGNATURE] || valid_symbols[BULLET] ||
+  //          valid_symbols[LIST_START])) {
+  //   int16_t segments = 0;
+  //   while (check_segment(lexer)) {
+  //     segments += 1;
+  //     skip(lexer);
+  //   }
+  //
+  //   if (indent_length != 2) {
+  //     if (segments != 1)
+  //       return false;
+  //     if (istabspace(lexer)) {
+  //       skip(lexer);
+  //
+  //       if (istabspace(lexer)) {
+  //         if (valid_symbols[BULLET_SEGMENT]) {
+  //           lexer->result_symbol = BULLET_SEGMENT;
+  //           return true;
+  //         } else if (valid_symbols[LISTSTART_SEGMENT]) {
+  //           lexer->result_symbol = LISTSTART_SEGMENT;
+  //           return true;
+  //         }
+  //       }
+  //       return false;
+  //     }
+  //     return false;
+  //
+  //   } else {
+  //     if (segments == 1) {
+  //       if (istabspace(lexer)) {
+  //         skip(lexer);
+  //
+  //         if (istabspace(lexer)) {
+  //           if (valid_symbols[BULLET_SEGMENT]) {
+  //             lexer->result_symbol = BULLET_SEGMENT;
+  //             return true;
+  //           } else if (valid_symbols[LISTSTART_SEGMENT]) {
+  //             lexer->result_symbol = LISTSTART_SEGMENT;
+  //             return true;
+  //           }
+  //         } else {
+  //           if (valid_symbols[SIG_SEGMENT]) {
+  //             lexer->result_symbol = SIG_SEGMENT;
+  //             return true;
+  //           }
+  //         }
+  //       }
+  //       return false;
+  //     } else if (segments >= 1) {
+  //       if (valid_symbols[SIG_SEGMENT]) {
+  //         lexer->result_symbol = SIG_SEGMENT;
+  //         return true;
+  //       }
+  //     }
+  //     return false;
+  //   }
+  // }
+
+  // if (indent_length == 2                                               //
+  //     && (valid_symbols[SIG_SEGMENT] || valid_symbols[BULLET_SEGMENT]) //
+  // ) {
+  //   int16_t segments = 0;
+  //   while (check_segment(lexer)) {
+  //     segments += 1;
+  //     skip(lexer);
+  //   }
+  //   if (segments == 1) {
+  //     if (istabspace(lexer)) {
+  //       skip(lexer);
+  //       if (istabspace(lexer)) {
+  //         lexer->result_symbol = BULLET_SEGMENT;
+  //       } else {
+  //         lexer->result_symbol = SIG_SEGMENT;
+  //       }
+  //       return true;
+  //     }
+  //     return false;
+  //   } else if (segments >= 1) {
+  //     lexer->result_symbol = SIG_SEGMENT;
+  //     return true;
+  //   }
+  //   return false;
+  // }
+
   // - Col=2 signature
-  // int16_t segments = (indent_length == 2) ? get_segments(lexer) : -1;
-  if (indent_length == 2                      //
-      && (check_token(lexer)                  //
-          || check_delimiter(lexer)           //
-          || check_closure(lexer, true, true) //
-          )) {
+  if (indent_length == 2                       //
+      && (valid_symbols[SECTION_END]           //
+          || valid_symbols[SIGNATURE])         //
+      && (check_token(lexer)                   //
+          || check_delimiter(lexer)            //
+          || check_closure(lexer, true, true)) //
+  ) {
     int16_t segments = 0;
     while (check_segment(lexer)) {
       segments += 1;
@@ -266,18 +363,21 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     if (lexer->lookahead == '\n') {
       return false;
     }
+    if (istabspace(lexer)) {
+      skip(lexer);
+    }
 
     if (valid_symbols[SECTION_END]                      //
-        && iswspace(lexer->lookahead)                   //
+        && !istabspace(lexer)                           //
         && segments > 0                                 //
         && segments <= VEC_BACK(scanner->section_stack) //
     ) {
       VEC_POP(scanner->section_stack);
       lexer->result_symbol = SECTION_END;
       return true;
-    } else if (valid_symbols[SIGNATURE]      //
-               && iswspace(lexer->lookahead) //
-               && segments > 0               //
+    } else if (valid_symbols[SIGNATURE] //
+               && !istabspace(lexer)    //
+               && segments > 0          //
     ) {
       VEC_PUSH(scanner->section_stack, segments);
       lexer->result_symbol = SIGNATURE;
@@ -325,7 +425,7 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   if ((valid_symbols[LIST_START] || valid_symbols[BULLET]) && newlines == 0) {
     if (valid_symbols[BULLET]) {
       lexer->mark_end(lexer);
-      Bullet bullet = getbullet(lexer, true);
+      Bullet bullet = getbullet(lexer, false);
       if (bullet == VEC_BACK(scanner->bullet_stack) &&
           indent_length == VEC_BACK(scanner->indent_length_stack) //
       ) {
@@ -357,21 +457,23 @@ void *tree_sitter_fey_external_scanner_create() {
   return scanner;
 }
 
-bool tree_sitter_fey_external_scanner_scan(void *payload, TSLexer *lexer,
-                                           const bool *valid_symbols) {
+bool tree_sitter_fey_external_scanner_scan(                  //
+    void *payload, TSLexer *lexer, const bool *valid_symbols //
+) {
   Scanner *scanner = (Scanner *)payload;
   return scan(scanner, lexer, valid_symbols);
 }
 
-unsigned tree_sitter_fey_external_scanner_serialize(void *payload,
-                                                    char *buffer) {
+unsigned tree_sitter_fey_external_scanner_serialize( //
+    void *payload, char *buffer                      //
+) {
   Scanner *scanner = (Scanner *)payload;
   return serialize(scanner, buffer);
 }
 
-void tree_sitter_fey_external_scanner_deserialize(void *payload,
-                                                  const char *buffer,
-                                                  unsigned length) {
+void tree_sitter_fey_external_scanner_deserialize(     //
+    void *payload, const char *buffer, unsigned length //
+) {
   Scanner *scanner = (Scanner *)payload;
   deserialize(scanner, buffer, length);
 }
