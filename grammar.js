@@ -28,7 +28,7 @@ export default grammar({
     $._bullet,
     // $._signature_segment,
     // $._liststart_segment,
-    // $._bullet_segment,
+    $._bullet_segment,
     $._two_spaces,
     $._signature,
     $._section_end,
@@ -151,7 +151,7 @@ export default grammar({
     ),
 
     bullet: $ => seq(
-      // $._bullet_segment,
+      $._bullet_segment,
       $._bullet,
       $.segment,
     ),

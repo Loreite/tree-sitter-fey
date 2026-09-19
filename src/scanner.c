@@ -47,7 +47,7 @@ enum TokenType {
 
   // SIG_SEGMENT,
   // LISTSTART_SEGMENT,
-  // BULLET_SEGMENT,
+  BULLET_SEGMENT,
 
   TWO_SPACES,
   SIGNATURE,
@@ -150,6 +150,15 @@ static bool dedent(Scanner *scanner, TSLexer *lexer) {
   VEC_POP(scanner->indent_length_stack);
   VEC_POP(scanner->bullet_stack);
   lexer->result_symbol = LIST_END;
+  return true;
+}
+
+static bool indent(                                                        //
+    Scanner *scanner, TSLexer *lexer, int16_t indent_length, Bullet bullet //
+) {
+  VEC_PUSH(scanner->indent_length_stack, indent_length);
+  VEC_PUSH(scanner->bullet_stack, bullet);
+  lexer->result_symbol = LIST_START;
   return true;
 }
 
@@ -350,7 +359,9 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   // - Col=2 signature
   if (indent_length == 2                       //
       && (valid_symbols[SECTION_END]           //
-          || valid_symbols[SIGNATURE])         //
+          || valid_symbols[SIGNATURE]          //
+          || valid_symbols[BULLET_SEGMENT]     //
+          || valid_symbols[LIST_START])        //
       && (check_token(lexer)                   //
           || check_delimiter(lexer)            //
           || check_closure(lexer, true, true)) //
@@ -367,14 +378,28 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       skip(lexer);
     }
 
-    if (valid_symbols[SECTION_END]                      //
-        && !istabspace(lexer)                           //
-        && segments > 0                                 //
-        && segments <= VEC_BACK(scanner->section_stack) //
+    if (valid_symbols[BULLET_SEGMENT] //
+        && istabspace(lexer)          //
+        && segments == 1              //
+    ) {
+      lexer->result_symbol = BULLET_SEGMENT;
+      return true;
+
+    } else if (valid_symbols[LIST_START]                                 //
+               && istabspace(lexer)                                      //
+               && segments == 1                                          //
+               && indent_length > VEC_BACK(scanner->indent_length_stack) //
+    ) {
+      return indent(scanner, lexer, indent_length, ISABULLET);
+    } else if (valid_symbols[SECTION_END]                      //
+               && !istabspace(lexer)                           //
+               && segments > 0                                 //
+               && segments <= VEC_BACK(scanner->section_stack) //
     ) {
       VEC_POP(scanner->section_stack);
       lexer->result_symbol = SECTION_END;
       return true;
+
     } else if (valid_symbols[SIGNATURE] //
                && !istabspace(lexer)    //
                && segments > 0          //
@@ -437,10 +462,11 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       if (bullet != NOTABULLET &&
           indent_length > VEC_BACK(scanner->indent_length_stack) //
       ) {
-        VEC_PUSH(scanner->indent_length_stack, indent_length);
-        VEC_PUSH(scanner->bullet_stack, bullet);
-        lexer->result_symbol = LIST_START;
-        return true;
+        return indent(scanner, lexer, indent_length, bullet);
+        // VEC_PUSH(scanner->indent_length_stack, indent_length);
+        // VEC_PUSH(scanner->bullet_stack, bullet);
+        // lexer->result_symbol = LIST_START;
+        // return true;
       }
     }
   }
