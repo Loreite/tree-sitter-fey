@@ -44,12 +44,7 @@ enum TokenType {
   LIST_END,
   LISTITEM_END,
   BULLET,
-
-  // SIG_SEGMENT,
-  // LISTSTART_SEGMENT,
-  // BULLET_SEGMENT,
-
-  TWO_SPACES,
+  FENCE,
   SIGNATURE,
   SECTION_END,
   ENDOFFILE,
@@ -79,6 +74,10 @@ typedef struct {
   stack *indent_length_stack;
   stack *bullet_stack;
   stack *section_stack;
+
+  stack *fence_indent_stack;
+  stack *fence_width_stack;
+  stack *fence_char_stack;
 } Scanner;
 
 static inline void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
@@ -86,6 +85,13 @@ static inline void skip(TSLexer *lexer) { lexer->advance(lexer, true); }
 
 unsigned serialize(Scanner *scanner, char *buffer) {
   size_t i = 0;
+
+  buffer[i++] = scanner->fence_indent_stack->len;
+  if (scanner->fence_indent_stack->len > 0) {
+    buffer[i++] = scanner->fence_indent_stack->data[0];
+    buffer[i++] = scanner->fence_width_stack->data[0];
+    buffer[i++] = scanner->fence_char_stack->data[0];
+  }
 
   size_t indent_count = scanner->indent_length_stack->len - 1;
   if (indent_count > UINT8_MAX)
@@ -124,32 +130,95 @@ void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
   VEC_CLEAR(scanner->bullet_stack);
   VEC_PUSH(scanner->bullet_stack, NOTABULLET);
 
+  VEC_CLEAR(scanner->fence_indent_stack);
+  VEC_CLEAR(scanner->fence_width_stack);
+  VEC_CLEAR(scanner->fence_char_stack);
+
   if (length == 0)
     return;
 
   size_t i = 0;
 
+  uint8_t fence_len = (uint8_t)buffer[i++];
+  if (fence_len > 0) {
+    VEC_PUSH(scanner->fence_indent_stack, buffer[i++]);
+    VEC_PUSH(scanner->fence_width_stack, buffer[i++]);
+    VEC_PUSH(scanner->fence_char_stack, buffer[i++]);
+  }
+
   size_t indent_count = (uint8_t)buffer[i++];
 
-  for (; i <= indent_count; i++)
-    VEC_PUSH(scanner->indent_length_stack, buffer[i]);
-  for (; i <= 2 * indent_count; i++)
-    VEC_PUSH(scanner->bullet_stack, buffer[i]);
-  for (; i < length; i++)
-    VEC_PUSH(scanner->section_stack, buffer[i]);
+  // Use an independent loop counter (j) so 'i' can safely track the buffer
+  // index
+  for (size_t j = 0; j < indent_count; j++) {
+    VEC_PUSH(scanner->indent_length_stack, buffer[i++]);
+  }
+
+  for (size_t j = 0; j < indent_count; j++) {
+    VEC_PUSH(scanner->bullet_stack, buffer[i++]);
+  }
+
+  // Safely consume all remaining bytes for the section stack
+  while (i < length) {
+    VEC_PUSH(scanner->section_stack, buffer[i++]);
+  }
 }
+// void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
+//   VEC_CLEAR(scanner->section_stack);
+//   VEC_PUSH(scanner->section_stack, 0);
+//   VEC_CLEAR(scanner->indent_length_stack);
+//   VEC_PUSH(scanner->indent_length_stack, -1);
+//   VEC_CLEAR(scanner->bullet_stack);
+//   VEC_PUSH(scanner->bullet_stack, NOTABULLET);
+//
+//   VEC_CLEAR(scanner->fence_indent_stack);
+//   VEC_CLEAR(scanner->fence_width_stack);
+//   VEC_CLEAR(scanner->fence_char_stack);
+//
+//   if (length == 0)
+//     return;
+//
+//   size_t i = 0;
+//
+//   uint8_t fence_len = (uint8_t)buffer[i++];
+//   if (fence_len > 0) {
+//     VEC_PUSH(scanner->fence_indent_stack, buffer[i++]);
+//     VEC_PUSH(scanner->fence_width_stack, buffer[i++]);
+//     VEC_PUSH(scanner->fence_char_stack, buffer[i++]);
+//   }
+//
+//   size_t indent_count = (uint8_t)buffer[i++];
+//   for (; i <= indent_count; i++)
+//     VEC_PUSH(scanner->indent_length_stack, buffer[i]);
+//   for (; i <= 2 * indent_count; i++)
+//     VEC_PUSH(scanner->bullet_stack, buffer[i]);
+//   for (; i < length; i++)
+//     VEC_PUSH(scanner->section_stack, buffer[i]);
+// }
 
 static bool in_error_recovery(const bool *valid_symbols) {
-  return (valid_symbols[LIST_START] && valid_symbols[LIST_END] &&
-          valid_symbols[LISTITEM_END] && valid_symbols[BULLET] &&
-          valid_symbols[SIGNATURE] && valid_symbols[SECTION_END] &&
-          valid_symbols[ENDOFFILE]);
+  return (valid_symbols[LIST_START]                                 //
+          && valid_symbols[LIST_END]                                //
+          && valid_symbols[LISTITEM_END]                            //
+          && valid_symbols[BULLET]                                  //
+          && valid_symbols[FENCE]                                   //
+          && valid_symbols[SIGNATURE]                               //
+          && valid_symbols[SECTION_END] && valid_symbols[ENDOFFILE] //
+  );
 }
 
 static bool dedent(Scanner *scanner, TSLexer *lexer) {
   VEC_POP(scanner->indent_length_stack);
   VEC_POP(scanner->bullet_stack);
   lexer->result_symbol = LIST_END;
+  return true;
+}
+static bool indent(                                                        //
+    Scanner *scanner, TSLexer *lexer, int16_t indent_length, Bullet bullet //
+) {
+  VEC_PUSH(scanner->indent_length_stack, indent_length);
+  VEC_PUSH(scanner->bullet_stack, bullet);
+  lexer->result_symbol = LIST_START;
   return true;
 }
 
@@ -235,7 +304,7 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   lexer->mark_end(lexer);
   while (true) {
     if (lexer->lookahead == ' ') {
-      indent_length += 1;
+      indent_length++;
     } else if (lexer->lookahead == '\t') {
       indent_length += 8;
     } else if (lexer->lookahead == '\0') {
@@ -249,141 +318,10 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
         return false;
 
       return true;
-    } else
+    } else {
       break;
-
+    }
     skip(lexer);
-  }
-
-  if (indent_is_two_space_or_tab(indent_length) && valid_symbols[TWO_SPACES]) {
-    lexer->result_symbol = TWO_SPACES;
-    return true;
-  }
-
-  // if ((valid_symbols[SIG_SEGMENT]           //
-  //      || valid_symbols[BULLET_SEGMENT]     //
-  //      || valid_symbols[LISTSTART_SEGMENT]) //
-  //     && !(valid_symbols[SIGNATURE] || valid_symbols[BULLET] ||
-  //          valid_symbols[LIST_START])) {
-  //   int16_t segments = 0;
-  //   while (check_segment(lexer)) {
-  //     segments += 1;
-  //     skip(lexer);
-  //   }
-  //
-  //   if (indent_length != 2) {
-  //     if (segments != 1)
-  //       return false;
-  //     if (istabspace(lexer)) {
-  //       skip(lexer);
-  //
-  //       if (istabspace(lexer)) {
-  //         if (valid_symbols[BULLET_SEGMENT]) {
-  //           lexer->result_symbol = BULLET_SEGMENT;
-  //           return true;
-  //         } else if (valid_symbols[LISTSTART_SEGMENT]) {
-  //           lexer->result_symbol = LISTSTART_SEGMENT;
-  //           return true;
-  //         }
-  //       }
-  //       return false;
-  //     }
-  //     return false;
-  //
-  //   } else {
-  //     if (segments == 1) {
-  //       if (istabspace(lexer)) {
-  //         skip(lexer);
-  //
-  //         if (istabspace(lexer)) {
-  //           if (valid_symbols[BULLET_SEGMENT]) {
-  //             lexer->result_symbol = BULLET_SEGMENT;
-  //             return true;
-  //           } else if (valid_symbols[LISTSTART_SEGMENT]) {
-  //             lexer->result_symbol = LISTSTART_SEGMENT;
-  //             return true;
-  //           }
-  //         } else {
-  //           if (valid_symbols[SIG_SEGMENT]) {
-  //             lexer->result_symbol = SIG_SEGMENT;
-  //             return true;
-  //           }
-  //         }
-  //       }
-  //       return false;
-  //     } else if (segments >= 1) {
-  //       if (valid_symbols[SIG_SEGMENT]) {
-  //         lexer->result_symbol = SIG_SEGMENT;
-  //         return true;
-  //       }
-  //     }
-  //     return false;
-  //   }
-  // }
-
-  // if (indent_length == 2                                               //
-  //     && (valid_symbols[SIG_SEGMENT] || valid_symbols[BULLET_SEGMENT]) //
-  // ) {
-  //   int16_t segments = 0;
-  //   while (check_segment(lexer)) {
-  //     segments += 1;
-  //     skip(lexer);
-  //   }
-  //   if (segments == 1) {
-  //     if (istabspace(lexer)) {
-  //       skip(lexer);
-  //       if (istabspace(lexer)) {
-  //         lexer->result_symbol = BULLET_SEGMENT;
-  //       } else {
-  //         lexer->result_symbol = SIG_SEGMENT;
-  //       }
-  //       return true;
-  //     }
-  //     return false;
-  //   } else if (segments >= 1) {
-  //     lexer->result_symbol = SIG_SEGMENT;
-  //     return true;
-  //   }
-  //   return false;
-  // }
-
-  // - Col=2 signature
-  if (indent_length == 2                       //
-      && (valid_symbols[SECTION_END]           //
-          || valid_symbols[SIGNATURE])         //
-      && (check_token(lexer)                   //
-          || check_delimiter(lexer)            //
-          || check_closure(lexer, true, true)) //
-  ) {
-    int16_t segments = 0;
-    while (check_segment(lexer)) {
-      segments += 1;
-      skip(lexer);
-    }
-    if (lexer->lookahead == '\n') {
-      return false;
-    }
-    if (istabspace(lexer)) {
-      skip(lexer);
-    }
-
-    if (valid_symbols[SECTION_END]                      //
-        && !istabspace(lexer)                           //
-        && segments > 0                                 //
-        && segments <= VEC_BACK(scanner->section_stack) //
-    ) {
-      VEC_POP(scanner->section_stack);
-      lexer->result_symbol = SECTION_END;
-      return true;
-    } else if (valid_symbols[SIGNATURE] //
-               && !istabspace(lexer)    //
-               && segments > 0          //
-    ) {
-      VEC_PUSH(scanner->section_stack, segments);
-      lexer->result_symbol = SIGNATURE;
-      return true;
-    }
-    return false;
   }
 
   // - Listiem ends
@@ -404,9 +342,9 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
         if (++newlines > 1)
           return dedent(scanner, lexer);
         indent_length = 0;
-      } else
+      } else {
         break;
-
+      }
       skip(lexer);
     }
 
@@ -417,31 +355,120 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
         lexer->result_symbol = LISTITEM_END;
         return true;
       }
+
       return dedent(scanner, lexer);
     }
   }
 
-  // - Liststart and bullets
-  if ((valid_symbols[LIST_START] || valid_symbols[BULLET]) && newlines == 0) {
-    if (valid_symbols[BULLET]) {
-      lexer->mark_end(lexer);
-      Bullet bullet = getbullet(lexer, false);
-      if (bullet == VEC_BACK(scanner->bullet_stack) &&
-          indent_length == VEC_BACK(scanner->indent_length_stack) //
+  // Zero-width lookahead for listitem bullets and heading signatures
+  int16_t segments = 0;
+  int32_t fence_char = lexer->lookahead;
+  int16_t fence_width = 0;
+  bool fenceable = true;
+  bool segmentable = true;
+  while (check_token(lexer) || check_delimiter(lexer) ||
+         check_closure(lexer, true, true) //
+  ) {
+    if (check_token(lexer)) {
+      while (check_token(lexer))
+        skip(lexer);
+      segmentable = false;
+      fenceable = false;
+    } else if (check_delimiter(lexer)) {
+      segments += 1;
+      segmentable = true;
+      if (fenceable && lexer->lookahead == fence_char) {
+        fence_width += 1;
+      } else {
+        fenceable = false;
+      }
+      skip(lexer);
+    } else if (check_closure(lexer, true, true)) {
+      segments += 1;
+      segmentable = true;
+      fenceable = false;
+      skip(lexer);
+    }
+  }
+
+  // start/end of raw Block
+  if (fenceable && valid_symbols[FENCE] && indent_length != 2     //
+      && (iswspace(lexer->lookahead) || lexer->lookahead == '\0') //
+      && fence_width >= 3                                         //
+  ) {
+
+    bool has_active_fence = scanner->fence_indent_stack->len > 0;
+    if (!has_active_fence) {
+      // Push State
+      VEC_PUSH(scanner->fence_indent_stack, indent_length);
+      VEC_PUSH(scanner->fence_width_stack, fence_width);
+      VEC_PUSH(scanner->fence_char_stack, fence_char);
+
+      lexer->result_symbol = FENCE;
+      return true;
+    } else {
+      // Validate identical parameters against the max-size-1 stack
+      if (VEC_BACK(scanner->fence_indent_stack) == indent_length &&
+          VEC_BACK(scanner->fence_width_stack) == fence_width &&
+          VEC_BACK(scanner->fence_char_stack) == fence_char //
       ) {
-        lexer->result_symbol = BULLET;
+        // Pop State
+        VEC_POP(scanner->fence_indent_stack);
+        VEC_POP(scanner->fence_width_stack);
+        VEC_POP(scanner->fence_char_stack);
+
+        lexer->result_symbol = FENCE;
         return true;
       }
-    } else if (valid_symbols[LIST_START]) {
-      Bullet bullet = getbullet(lexer, false);
-      if (bullet != NOTABULLET &&
-          indent_length > VEC_BACK(scanner->indent_length_stack) //
-      ) {
-        VEC_PUSH(scanner->indent_length_stack, indent_length);
-        VEC_PUSH(scanner->bullet_stack, bullet);
-        lexer->result_symbol = LIST_START;
-        return true;
+    }
+  }
+
+  if (!segmentable)
+    return false;
+
+  bool is_bullet = false;
+  bool is_signature = false;
+
+  if (lexer->lookahead != '\n' && lexer->lookahead != '\r') {
+    bool has_second_space = false;
+    if (istabspace(lexer)) {
+      skip(lexer);
+      if (istabspace(lexer)) {
+        has_second_space = true;
       }
+    }
+
+    is_bullet = (segments == 1 && has_second_space);
+    is_signature = (segments > 0 && !has_second_space);
+  }
+
+  if (is_bullet && newlines == 0) {
+    if (valid_symbols[BULLET]                                      //
+        && indent_length == VEC_BACK(scanner->indent_length_stack) //
+    ) {
+      lexer->result_symbol = BULLET;
+      return true;
+
+    } else if (valid_symbols[LIST_START]                                 //
+               && indent_length > VEC_BACK(scanner->indent_length_stack) //
+    ) {
+      return indent(scanner, lexer, indent_length, ISABULLET);
+    }
+    return false;
+  }
+
+  if (indent_length == 2 && is_signature) {
+    if (valid_symbols[SECTION_END]                      //
+        && segments <= VEC_BACK(scanner->section_stack) //
+    ) {
+      VEC_POP(scanner->section_stack);
+      lexer->result_symbol = SECTION_END;
+      return true;
+
+    } else if (valid_symbols[SIGNATURE]) {
+      VEC_PUSH(scanner->section_stack, segments);
+      lexer->result_symbol = SIGNATURE;
+      return true;
     }
   }
 
@@ -453,6 +480,11 @@ void *tree_sitter_fey_external_scanner_create() {
   scanner->indent_length_stack = (stack *)calloc(1, sizeof(stack));
   scanner->bullet_stack = (stack *)calloc(1, sizeof(stack));
   scanner->section_stack = (stack *)calloc(1, sizeof(stack));
+
+  scanner->fence_indent_stack = (stack *)calloc(1, sizeof(stack));
+  scanner->fence_width_stack = (stack *)calloc(1, sizeof(stack));
+  scanner->fence_char_stack = (stack *)calloc(1, sizeof(stack));
+
   deserialize(scanner, NULL, 0);
   return scanner;
 }
@@ -483,6 +515,15 @@ void tree_sitter_fey_external_scanner_destroy(void *payload) {
   VEC_FREE(scanner->indent_length_stack);
   VEC_FREE(scanner->bullet_stack);
   VEC_FREE(scanner->section_stack);
+
+  VEC_FREE(scanner->fence_indent_stack);
+  VEC_FREE(scanner->fence_width_stack);
+  VEC_FREE(scanner->fence_char_stack);
+
+  free(scanner->fence_indent_stack);
+  free(scanner->fence_width_stack);
+  free(scanner->fence_char_stack);
+
   free(scanner->indent_length_stack);
   free(scanner->bullet_stack);
   free(scanner->section_stack);

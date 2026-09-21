@@ -1,5 +1,51 @@
 [
   {
+    "type": "block",
+    "named": true,
+    "fields": {
+      "closefence": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "fence",
+            "named": true
+          }
+        ]
+      },
+      "contents": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "contents",
+            "named": true
+          }
+        ]
+      },
+      "openfence": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "fence",
+            "named": true
+          }
+        ]
+      },
+      "parameter": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "expr",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "body",
     "named": true,
     "fields": {},
@@ -7,6 +53,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "block",
+          "named": true
+        },
         {
           "type": "list",
           "named": true
@@ -28,6 +78,21 @@
       "types": [
         {
           "type": "segment",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "contents",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "expr",
           "named": true
         }
       ]
@@ -125,6 +190,22 @@
         "required": false,
         "types": [
           {
+            "type": "\n",
+            "named": false
+          },
+          {
+            "type": "\r",
+            "named": false
+          },
+          {
+            "type": "\r\n",
+            "named": false
+          },
+          {
+            "type": "block",
+            "named": true
+          },
+          {
             "type": "list",
             "named": true
           },
@@ -221,6 +302,18 @@
         }
       ]
     }
+  },
+  {
+    "type": "\n",
+    "named": false
+  },
+  {
+    "type": "\r",
+    "named": false
+  },
+  {
+    "type": "\r\n",
+    "named": false
   },
   {
     "type": "  ",
@@ -341,6 +434,10 @@
   {
     "type": "delim",
     "named": false
+  },
+  {
+    "type": "fence",
+    "named": true
   },
   {
     "type": "index",

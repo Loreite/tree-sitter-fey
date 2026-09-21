@@ -26,10 +26,7 @@ export default grammar({
     $._list_end,
     $._listitem_end,
     $._bullet,
-    // $._signature_segment,
-    // $._liststart_segment,
-    // $._bullet_segment,
-    $._two_spaces,
+    $._fence,
     $._signature,
     $._section_end,
     $._eof,  // Basically just '\0', but allows multiple to be matched
@@ -37,7 +34,7 @@ export default grammar({
 
 
   inline: $ => [
-    // $._nl,
+    $._nl,
     $._eol,
     // $._ts_contents,
     // $._directive_list,
@@ -93,7 +90,7 @@ export default grammar({
       $.list,
       // $.tag,
       // $.table,
-      // $.block
+      $.block
     ),
 
     section: $ => seq(
@@ -106,14 +103,13 @@ export default grammar({
 
     heading: $ => seq(
       field('signature', $.signature),
-      /[ \t]+/,
+      /[ \t]/,
       optional(field('title', $.title)),
       $._eol,
       // repeat($._nl),
     ),
 
     signature: $ => seq(
-      // $._signature_segment,
       $._signature,
       '  ',
       repeat1($.segment),
@@ -121,7 +117,7 @@ export default grammar({
 
     segment: $ => seq(
       alias(/[a-zA-Z0-9_]*/, 'index'),
-      alias(token.immediate(/[.,:;!?/\\'"`\-+*=~^%@&#$\[\](){}<>]/), 'delim'),
+      alias(token.immediate(/[.,:;!?\\/'"`\-+*=~^%@&#$\[\](){}<>]/), 'delim'),
     ),
 
     // title: $ => seq(/[ \t]+/, /[^\r\n]*/),
@@ -134,7 +130,6 @@ export default grammar({
 
     list: $ => seq(
       // optional($._directive_list),
-      // $._liststart_segment,
       $._list_start,  // captures indent length and bullet type
       repeat(seq($.listitem, $._listitem_end, repeat($._nl))),
       seq($.listitem, $._list_end)
@@ -142,7 +137,8 @@ export default grammar({
 
     listitem: $ => seq(
       field('bullet', $.bullet),
-      $._two_spaces, /[ \t]{2,}/,
+      // $._two_spaces,
+      /[ \t]{2,}/,
       // optional(field('checkbox', $.checkbox)),
       choice(
         $._eof,
@@ -153,9 +149,34 @@ export default grammar({
     bullet: $ => seq(
       // $._bullet_segment,
       $._bullet,
+      /[ \t]*/,
       $.segment,
     ),
 
+    block: $ => seq(
+      // optional($._directive_list),
+      $._fence,
+      /[ \t]*/,
+      field('openfence', $.fence),
+      /[ \t]*/,
+      optional(repeat1(field('parameter', $.expr))),
+      $._nl,
+      optional(field('contents', $.contents)),
+      $._fence,
+      /[ \t]*/,
+      field('closefence', $.fence),
+      $._eol,
+    ),
+
+    fence: $ => /[.,:;!?\\/'"`\-+*=~^%@&#$]{3,}/,
+
+    contents: $ => seq(
+      optional($._expr_line),
+      repeat1($._nl),
+      repeat(seq($._expr_line, repeat1($._nl))),
+    ),
+
+    _expr_line: $ => repeat1($.expr),
     _multiline_text: $ => repeat1(
       seq(repeat1($.expr), $._eol)
     ),
@@ -165,7 +186,7 @@ export default grammar({
       repeat(expr('immediate', token.immediate))
     ),
 
-    _nl: _ => /\r\n|\r|\n/,
+    _nl: _ => choice('\r\n', '\r', '\n'),
     _eol: $ => choice($._nl, $._eof),
   }
 });
