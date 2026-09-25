@@ -89,7 +89,7 @@ export default grammar({
       // $.comment,
       $.list,
       // $.tag,
-      // $.table,
+      $.table,
       $.block
     ),
 
@@ -147,11 +147,56 @@ export default grammar({
     ),
 
     bullet: $ => seq(
-      // $._bullet_segment,
       $._bullet,
       /[ \t]*/,
       $.segment,
     ),
+
+    table: $ => prec.right(seq(
+      // optional($._directive_list),
+      $.row,
+      repeat(choice($.row, $.cbo, $.cbi, $.hr)),
+      // repeat($.formula),
+    )),
+
+    row: $ => prec(1, seq(
+      token(prec(1, '|')),
+      repeat1(field('cell', $.cell)),
+      $._eol,
+    )),
+
+    cell: $ => choice(seq(
+      field('contents', alias($._expr_line, $.contents)),
+      token(prec(1, '|')),
+    ),
+      alias(token(prec(1, /[ ]*\|/)), 'empty'),
+    ),
+
+    cbo: $ => seq(
+      token(prec(1, '+')),
+      repeat1(field('cb_cell', $.cbo_cell)),
+      $._eol,
+    ),
+    cbo_cell: $ => seq(imm1(/[-]+/), imm1(/[+*]/)),
+
+    cbi: $ => seq(
+      token(prec(1, '+')),
+      repeat1(field('cb_cell', $.cbi_cell)),
+      $._eol,
+    ),
+    cbi_cell: $ => cb_choice(/[~]+/, /[+*]/, $),
+
+    hr: $ => seq(
+      token(prec(1, '+')),
+      repeat1(seq(imm1(/=+/), imm1(/[+]/))),
+      $._eol,
+    ),
+
+    // formula: $ => seq(
+    //   caseInsensitive('#+tblfm:'),
+    //   field('formula', optional($._expr_line)),
+    //   $._eol,
+    // ),
 
     block: $ => seq(
       // optional($._directive_list),
@@ -198,8 +243,25 @@ function expr(pr, tfunc, skip = '') {
     alias(tfunc(prec(pr, /\p{L}+/)), 'str'),
     alias(tfunc(prec(pr, /\p{N}+/)), 'num'),
     alias(tfunc(prec(pr, /[^\p{Z}\p{L}\p{N}\t\n\r]/)), 'sym'),
-     // for checkboxes: ugly, but makes them work..
+    // for checkboxes: ugly, but makes them work..
     // alias(tfunc(prec(pr, 'x')), 'str'),
     // alias(tfunc(prec(pr, 'X')), 'str'),
+  )
+}
+
+function imm1(item) {
+  return token.immediate(prec(1, item));
+}
+function cb_choice(pattern1, pattern2, $) {
+  return choice(
+    seq(
+      imm1(pattern1),
+      imm1(pattern2)
+    ),
+    seq(
+      imm1('|'),
+      imm1(/[ ]+/),
+      imm1(/\|[+*]/),
+    ),
   )
 }

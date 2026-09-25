@@ -64,6 +64,10 @@
         {
           "type": "paragraph",
           "named": true
+        },
+        {
+          "type": "table",
+          "named": true
         }
       ]
     }
@@ -81,6 +85,64 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "cbi",
+    "named": true,
+    "fields": {
+      "cb_cell": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "cbi_cell",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "cbi_cell",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "cbo",
+    "named": true,
+    "fields": {
+      "cb_cell": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "cbo_cell",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "cbo_cell",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "cell",
+    "named": true,
+    "fields": {
+      "contents": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "contents",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -157,6 +219,11 @@
     }
   },
   {
+    "type": "hr",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "list",
     "named": true,
     "fields": {},
@@ -212,6 +279,10 @@
           {
             "type": "paragraph",
             "named": true
+          },
+          {
+            "type": "table",
+            "named": true
           }
         ]
       }
@@ -230,6 +301,22 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "row",
+    "named": true,
+    "fields": {
+      "cell": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "cell",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -283,6 +370,33 @@
       "types": [
         {
           "type": "segment",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "table",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "cbi",
+          "named": true
+        },
+        {
+          "type": "cbo",
+          "named": true
+        },
+        {
+          "type": "hr",
+          "named": true
+        },
+        {
+          "type": "row",
           "named": true
         }
       ]
@@ -433,6 +547,10 @@
   },
   {
     "type": "delim",
+    "named": false
+  },
+  {
+    "type": "empty",
     "named": false
   },
   {
