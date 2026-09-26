@@ -106,7 +106,18 @@
   {
     "type": "cbi_cell",
     "named": true,
-    "fields": {}
+    "fields": {
+      "contents": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "contents",
+            "named": true
+          }
+        ]
+      }
+    }
   },
   {
     "type": "cbo",
@@ -550,6 +561,10 @@
     "named": false
   },
   {
+    "type": "div",
+    "named": false
+  },
+  {
     "type": "empty",
     "named": false
   },
@@ -571,6 +586,14 @@
   },
   {
     "type": "sym",
+    "named": false
+  },
+  {
+    "type": "term",
+    "named": false
+  },
+  {
+    "type": "v",
     "named": false
   },
   {
