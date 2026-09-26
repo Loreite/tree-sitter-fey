@@ -155,7 +155,7 @@ export default grammar({
     table: $ => prec.right(seq(
       // optional($._directive_list),
       $.row,
-      repeat(choice($.row, $.cbo, $.cbi, $.hr)),
+      repeat(choice($.row, $.cbo, $.cbi, $.hr, alias($._cbe, $.cbo))),
       // repeat($.formula),
     )),
 
@@ -173,11 +173,18 @@ export default grammar({
     ),
 
     cbo: $ => seq(
-      token(prec(1, '+')),
+      token(prec(1, 'v')),
       repeat1(field('cb_cell', $.cbo_cell)),
       $._eol,
     ),
-    cbo_cell: $ => seq(imm1(/[-]+/), imm1(/[+*]/)),
+    cbo_cell: $ => seq(imm1(/[-]+/), imm1(/[v*]/)),
+
+    _cbe: $ => seq(
+      token(prec(1, '^')),
+      repeat1(field('cb_cell', alias($._cbe_cell, $.cbo_cell))),
+      $._eol,
+    ),
+    _cbe_cell: $ => seq(imm1(/[-]+/), imm1('^')),
 
     cbi: $ => seq(
       token(prec(1, '+')),
@@ -254,14 +261,18 @@ function imm1(item) {
 }
 function cb_choice(pattern1, pattern2, $) {
   return choice(
-    seq(
+    alias(seq(
       imm1(pattern1),
       imm1(pattern2)
+    ), 'div'),
+    seq(
+      imm1('|'),
+      alias(token(prec(1, /[ ]*\|[+]/)), 'empty'),
     ),
     seq(
       imm1('|'),
-      imm1(/[ ]+/),
-      imm1(/\|[+*]/),
+      field('contents', alias($._expr_line, $.contents)),
+      alias(token(prec(1, /\|[+]/)), 'term'),
     ),
   )
 }
