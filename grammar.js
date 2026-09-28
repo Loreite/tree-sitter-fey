@@ -235,7 +235,11 @@ export default grammar({
       $._fence,
       /[ \t]*/,
       field('openfence', $.fence),
-      optional(seq(/[ \t]{2,}/, repeat1(field('parameter', $.expr)))),
+      optional(seq(
+        /[ \t]{2,}/, 
+        field('name', $.expr),
+        repeat(field('parameter', $.expr))
+      )),
       $._nl,
       optional(field('contents', $.contents)),
       $._fence,
@@ -244,7 +248,7 @@ export default grammar({
       $._eol,
     ),
 
-    fence: $ => /[.,:;!?\\/'"`\-+*=~^%@&#$]{3,}/,
+    fence: $ => /[.,:;!?\\/'"`\-+*=~^%@&#$]+/,
 
     contents: $ => seq(
       optional(/[ \t]+/),
