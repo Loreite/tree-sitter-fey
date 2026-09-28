@@ -88,6 +88,27 @@
     }
   },
   {
+    "type": "cbe",
+    "named": true,
+    "fields": {
+      "cb_cell": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "cbe_cell",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "cbe_cell",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "cbi",
     "named": true,
     "fields": {
@@ -107,6 +128,20 @@
     "type": "cbi_cell",
     "named": true,
     "fields": {
+      "cb_corner": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "cb_corner",
+            "named": true
+          },
+          {
+            "type": "vmerge",
+            "named": true
+          }
+        ]
+      },
       "contents": {
         "multiple": false,
         "required": false,
@@ -138,7 +173,18 @@
   {
     "type": "cbo_cell",
     "named": true,
-    "fields": {}
+    "fields": {
+      "cb_corner": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "cb_corner",
+            "named": true
+          }
+        ]
+      }
+    }
   },
   {
     "type": "cell",
@@ -162,7 +208,7 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
         {
           "type": "expr",
@@ -331,6 +377,50 @@
     }
   },
   {
+    "type": "row_block",
+    "named": true,
+    "fields": {
+      "cbe": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "cbe",
+            "named": true
+          }
+        ]
+      },
+      "cbo": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "cbo",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "cbi",
+          "named": true
+        },
+        {
+          "type": "hr",
+          "named": true
+        },
+        {
+          "type": "row",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "section",
     "named": true,
     "fields": {
@@ -389,25 +479,32 @@
   {
     "type": "table",
     "named": true,
-    "fields": {},
+    "fields": {
+      "crown": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "row",
+            "named": true
+          }
+        ]
+      }
+    },
     "children": {
       "multiple": true,
-      "required": true,
+      "required": false,
       "types": [
-        {
-          "type": "cbi",
-          "named": true
-        },
-        {
-          "type": "cbo",
-          "named": true
-        },
         {
           "type": "hr",
           "named": true
         },
         {
           "type": "row",
+          "named": true
+        },
+        {
+          "type": "row_block",
           "named": true
         }
       ]
@@ -557,6 +654,10 @@
     "named": false
   },
   {
+    "type": "cb_corner",
+    "named": true
+  },
+  {
     "type": "delim",
     "named": false
   },
@@ -589,12 +690,12 @@
     "named": false
   },
   {
-    "type": "term",
+    "type": "v",
     "named": false
   },
   {
-    "type": "v",
-    "named": false
+    "type": "vmerge",
+    "named": true
   },
   {
     "type": "{",

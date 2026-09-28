@@ -154,10 +154,16 @@ export default grammar({
 
     table: $ => prec.right(seq(
       // optional($._directive_list),
-      $.row,
-      repeat(choice($.row, $.cbo, $.cbi, $.hr, alias($._cbe, $.cbo))),
+      field('crown', $.row),
+      repeat(choice($.row, $.row_block, $.hr)),
       // repeat($.formula),
     )),
+
+    row_block: $ => seq(
+      field('cbo', $.cbo),
+      repeat(choice($.row, $.cbi, $.hr)),
+      field('cbe', $.cbe),
+    ),
 
     row: $ => prec(1, seq(
       token(prec(1, '|')),
@@ -177,21 +183,40 @@ export default grammar({
       repeat1(field('cb_cell', $.cbo_cell)),
       $._eol,
     ),
-    cbo_cell: $ => seq(imm1(/[-]+/), imm1(/[v*]/)),
+    cbo_cell: $ => seq(
+      imm1(/[-]+/),
+      choice(
+        field('cb_corner', alias(imm1(/[v]/), $.cb_corner)),
+        imm1(/[*]/),
+      ),
+    ),
 
-    _cbe: $ => seq(
+    cbe: $ => seq(
       token(prec(1, '^')),
-      repeat1(field('cb_cell', alias($._cbe_cell, $.cbo_cell))),
+      repeat1(field('cb_cell', $.cbe_cell)),
       $._eol,
     ),
-    _cbe_cell: $ => seq(imm1(/[-]+/), imm1('^')),
+    cbe_cell: $ => seq(imm1(/[-]+/), imm1('^')),
 
     cbi: $ => seq(
       token(prec(1, '+')),
       repeat1(field('cb_cell', $.cbi_cell)),
       $._eol,
     ),
-    cbi_cell: $ => cb_choice(/[~]+/, /[+*]/, $),
+    cbi_cell: $ => choice(
+      alias(seq(
+        imm1(/[~]+/),
+        choice(
+          field('cb_corner', alias(imm1(/[+]/), $.cb_corner)),
+          imm1(/[*]/),
+        )
+      ), 'div'),
+      field('cb_corner', alias(token(prec(1, /[ ]*[+]/)), $.vmerge)),
+      seq(
+        field('contents', alias($._expr_line, $.contents)),
+        field('cb_corner', alias(token(prec(1, '+')), $.vmerge)),
+      ),
+    ),
 
     hr: $ => seq(
       token(prec(1, '+')),
@@ -225,7 +250,7 @@ export default grammar({
     contents: $ => seq(
       optional($._expr_line),
       repeat1($._nl),
-      repeat(seq($._expr_line, repeat1($._nl))),
+      repeat1(seq($._expr_line, repeat1($._nl))),
     ),
 
     _expr_line: $ => repeat1($.expr),
@@ -258,21 +283,4 @@ function expr(pr, tfunc, skip = '') {
 
 function imm1(item) {
   return token.immediate(prec(1, item));
-}
-function cb_choice(pattern1, pattern2, $) {
-  return choice(
-    alias(seq(
-      imm1(pattern1),
-      imm1(pattern2)
-    ), 'div'),
-    seq(
-      imm1('|'),
-      alias(token(prec(1, /[ ]*\|[+]/)), 'empty'),
-    ),
-    seq(
-      imm1('|'),
-      field('contents', alias($._expr_line, $.contents)),
-      alias(token(prec(1, /\|[+]/)), 'term'),
-    ),
-  )
 }

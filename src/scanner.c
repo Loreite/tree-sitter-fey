@@ -78,6 +78,8 @@ typedef struct {
   stack *fence_indent_stack;
   stack *fence_width_stack;
   stack *fence_char_stack;
+
+  bool is_at_section_start;
 } Scanner;
 
 static inline void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
@@ -299,6 +301,8 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   if (in_error_recovery(valid_symbols))
     return false;
 
+  scanner->is_at_section_start = false;
+
   // - Section ends
   int16_t indent_length = 0;
   lexer->mark_end(lexer);
@@ -310,8 +314,10 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     } else if (lexer->lookahead == '\0') {
       if (valid_symbols[LIST_END]) {
         lexer->result_symbol = LIST_END;
+
       } else if (valid_symbols[SECTION_END]) {
         lexer->result_symbol = SECTION_END;
+
       } else if (valid_symbols[ENDOFFILE]) {
         lexer->result_symbol = ENDOFFILE;
       } else
@@ -357,6 +363,8 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       }
 
       return dedent(scanner, lexer);
+    } else if (indent_length == 2) {
+      scanner->is_at_section_start = true;
     }
   }
 
@@ -458,6 +466,10 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   }
 
   if (indent_length == 2 && is_signature) {
+    if (scanner->is_at_section_start && valid_symbols[LIST_END]) {
+      return dedent(scanner, lexer);
+    }
+
     if (valid_symbols[SECTION_END]                      //
         && segments <= VEC_BACK(scanner->section_stack) //
     ) {
