@@ -53,15 +53,6 @@ enum TokenType {
 typedef enum {
   NOTABULLET,
   ISABULLET,
-  // DASH,
-  // PLUS,
-  // STAR,
-  // LOWERDOT,
-  // UPPERDOT,
-  // LOWERPAREN,
-  // UPPERPAREN,
-  // NUMDOT,
-  // NUMPAREN,
 } Bullet;
 
 typedef struct {
@@ -162,8 +153,7 @@ void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
 
   size_t indent_count = (uint8_t)buffer[i++];
 
-  // Use an independent loop counter (j) so 'i' can safely track the buffer
-  // index
+  // Use independent loop counter (j) so 'i' can safely track the buffer index
   for (size_t j = 0; j < indent_count; j++) {
     VEC_PUSH(scanner->indent_length_stack, buffer[i++]);
   }
@@ -177,38 +167,6 @@ void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
     VEC_PUSH(scanner->section_stack, buffer[i++]);
   }
 }
-// void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
-//   VEC_CLEAR(scanner->section_stack);
-//   VEC_PUSH(scanner->section_stack, 0);
-//   VEC_CLEAR(scanner->indent_length_stack);
-//   VEC_PUSH(scanner->indent_length_stack, -1);
-//   VEC_CLEAR(scanner->bullet_stack);
-//   VEC_PUSH(scanner->bullet_stack, NOTABULLET);
-//
-//   VEC_CLEAR(scanner->fence_indent_stack);
-//   VEC_CLEAR(scanner->fence_width_stack);
-//   VEC_CLEAR(scanner->fence_char_stack);
-//
-//   if (length == 0)
-//     return;
-//
-//   size_t i = 0;
-//
-//   uint8_t fence_len = (uint8_t)buffer[i++];
-//   if (fence_len > 0) {
-//     VEC_PUSH(scanner->fence_indent_stack, buffer[i++]);
-//     VEC_PUSH(scanner->fence_width_stack, buffer[i++]);
-//     VEC_PUSH(scanner->fence_char_stack, buffer[i++]);
-//   }
-//
-//   size_t indent_count = (uint8_t)buffer[i++];
-//   for (; i <= indent_count; i++)
-//     VEC_PUSH(scanner->indent_length_stack, buffer[i]);
-//   for (; i <= 2 * indent_count; i++)
-//     VEC_PUSH(scanner->bullet_stack, buffer[i]);
-//   for (; i < length; i++)
-//     VEC_PUSH(scanner->section_stack, buffer[i]);
-// }
 
 static bool in_error_recovery(const bool *valid_symbols) {
   return (valid_symbols[LIST_START]                                 //
@@ -374,7 +332,8 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     }
   }
 
-  // Zero-width lookahead for listitem bullets and heading signatures
+  // Zero-width lookahead for
+  // block fences, listitem bullets, and heading signatures
   int16_t segments = 0;
   int32_t fence_char = lexer->lookahead;
   int16_t fence_width = 0;
@@ -405,17 +364,8 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     }
   }
 
-  // start/end of raw Block with strict suffix validation
-  // int16_t fence_looked_ahead = 0;
-  // 0 = false, 1 = true and no tabspace found, 2 = true and tabspace found
   bool fence_looked_ahead = false;
   if (fenceable) {
-    // if (scanner->base_indent == -1) {
-    //   scanner->base_indent = indent_length >= 2 ? indent_length - 2 : 0;
-    // }
-
-    // Fence must be followed by either a newline/EOF OR at least two tab/space
-    // characters
     bool valid_fence_suffix = false;
     if (lexer->lookahead == '\n' || lexer->lookahead == '\r' ||
         lexer->lookahead == '\0') {
@@ -428,30 +378,25 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       }
     }
 
-    if (valid_symbols[FENCE] &&
-        // (scanner->base_indent == -1 ||
-        //  indent_length != scanner->base_indent + 2) &&
-        valid_fence_suffix && fence_width >= 3) {
-
-      bool has_active_fence =
-          scanner->fence_indent_stack->len > 0; // standard access below
+    if (valid_symbols[FENCE] && fence_width >= 3) {
       if (scanner->fence_indent_stack->len == 0) {
-        VEC_PUSH(scanner->fence_indent_stack, indent_length);
-        VEC_PUSH(scanner->fence_width_stack, fence_width);
-        VEC_PUSH(scanner->fence_char_stack, fence_char);
-        lexer->result_symbol = FENCE;
-        return true;
-      } else {
-        if (VEC_BACK(scanner->fence_indent_stack) == indent_length &&
-            VEC_BACK(scanner->fence_width_stack) == fence_width &&
-            VEC_BACK(scanner->fence_char_stack) == fence_char //
-        ) {
-          VEC_POP(scanner->fence_indent_stack);
-          VEC_POP(scanner->fence_width_stack);
-          VEC_POP(scanner->fence_char_stack);
+        // opening fence: keep the suffix requirement
+        if (valid_fence_suffix) {
+          VEC_PUSH(scanner->fence_indent_stack, indent_length);
+          VEC_PUSH(scanner->fence_width_stack, fence_width);
+          VEC_PUSH(scanner->fence_char_stack, fence_char);
           lexer->result_symbol = FENCE;
           return true;
         }
+      } else if (VEC_BACK(scanner->fence_indent_stack) == indent_length &&
+                 VEC_BACK(scanner->fence_width_stack) == fence_width &&
+                 VEC_BACK(scanner->fence_char_stack) == fence_char) {
+        // closing fence: no suffix check, anything may follow
+        VEC_POP(scanner->fence_indent_stack);
+        VEC_POP(scanner->fence_width_stack);
+        VEC_POP(scanner->fence_char_stack);
+        lexer->result_symbol = FENCE;
+        return true;
       }
     }
   }

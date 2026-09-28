@@ -247,9 +247,10 @@ export default grammar({
     fence: $ => /[.,:;!?\\/'"`\-+*=~^%@&#$]{3,}/,
 
     contents: $ => seq(
+      optional(/[ \t]+/),
       optional($._expr_line),
       repeat1($._nl),
-      repeat1(seq($._expr_line, repeat1($._nl))),
+      repeat(seq($._expr_line, repeat1($._nl))),
     ),
 
     _expr_line: $ => repeat1($.expr),
