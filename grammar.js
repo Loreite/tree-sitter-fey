@@ -60,8 +60,7 @@ export default grammar({
     $._signature,
     $._section_end,
     $._eof,  // Basically just '\0', but allows multiple to be matched
-    $._tag_start,
-    $._tag_end,
+    $._tag_nl,
   ],
 
 
@@ -290,39 +289,42 @@ export default grammar({
       repeat(seq($._expr_line, repeat1($._nl))),
     ),
 
-    // simple_multi_tag: $ => prec.dynamic(1, choice(
     simple_multi_tag: $ => choice(
-      seq(
-        $._tag_start,
-        alias(nim(reTagOpen), 'tag_start'),
-        repeat($._nl),
-        field('name', alias(nim(reTagName), 'tag_name')),
-        repeat($._nl),
-        repeat(seq( $.tag_value, repeat($._nl))),
-        $._tag_end,
-        alias(nim(reTagClose), 'tag_end'),
-      ),
-    ),
-    // )),
+      ...tagBrackets.flatMap(([open, close]) =>
+        tagTokens.map(tok => seq(
+          alias(seq(nim(open), imm(tok)), 'tag_start'),
 
-    // simple_line_tag: $ => prec.dynamic(1, seq(
-    simple_line_tag: $ => seq(
-      $._tag_start,
-      alias(nim(reTagOpen), 'tag_start'),
-      field('name', alias(nim(reTagName), 'tag_name')),
-      repeat($.tag_value),
-      $._tag_end,
-      alias(nim(reTagClose), 'tag_end'),
+          repeat($._tag_nl),
+          field('name', alias(nim(reTagName), 'tag_name')),
+          repeat(seq($.tag_value, repeat($._tag_nl))),
+
+          alias(seq(nim(tok), imm(close)), 'tag_end')
+        ))
+      )
     ),
-    // )),
+
+    simple_line_tag: $ => choice(
+      ...tagBrackets.flatMap(([open, close]) =>
+        tagTokens.map(tok => seq(
+          alias(seq(nim(open), imm(tok)), 'tag_start'),
+
+          field('name', alias(nim(reTagName), 'tag_name')),
+          repeat($.tag_value),
+
+          alias(seq(nim(tok), imm(close)), 'tag_end')
+        ))
+      )
+    ),
 
     tag_value: $ => choice(
       seq(
         alias(nim(','), 'value_delimiter'),
+        repeat($._tag_nl),
         field('arg_val', alias($._tag_value, 'value'))
       ),
       seq(
         alias(nim(';'), 'value_delimiter'),
+        repeat($._tag_nl),
         field('arg_keyval', alias(seq(
           alias(nim(reTagKey), 'key'),
           alias(nim(/[.:=]/), 'tag_delimiter'),
@@ -332,7 +334,6 @@ export default grammar({
     ),
 
     _tag_value: $ => choice(
-      // tag_word(',;.:=' + tagQuotes.join('')),
       tag_word(',;' + tagQuotes.join('')),
 
       ...tagQuotes.map(q => seq(

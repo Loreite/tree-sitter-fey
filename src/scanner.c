@@ -4,8 +4,6 @@
 #include <stdio.h>
 #include <strings.h>
 #include <wctype.h>
-// #include <stdlib.h>
-// #include <string.h>
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
@@ -48,8 +46,7 @@ enum TokenType {
   SIGNATURE,
   SECTION_END,
   ENDOFFILE,
-  TAG_START,
-  TAG_END,
+  TAG_NL,
 };
 
 typedef enum {
@@ -197,8 +194,7 @@ static bool in_error_recovery(const bool *valid_symbols) {
           && valid_symbols[SIGNATURE]    //
           && valid_symbols[SECTION_END]  //
           && valid_symbols[ENDOFFILE]    //
-          && valid_symbols[TAG_START]    //
-          && valid_symbols[TAG_END]      //
+          && valid_symbols[TAG_NL]       //
   );
 }
 
@@ -208,9 +204,9 @@ static bool dedent(Scanner *scanner, TSLexer *lexer) {
   lexer->result_symbol = LIST_END;
   return true;
 }
-static bool indent(                                                        //
-    Scanner *scanner, TSLexer *lexer, int16_t indent_length, Bullet bullet //
-) {
+
+static bool indent(Scanner *scanner, TSLexer *lexer, int16_t indent_length,
+                   Bullet bullet) {
   VEC_PUSH(scanner->indent_length_stack, indent_length);
   VEC_PUSH(scanner->bullet_stack, bullet);
   lexer->result_symbol = LIST_START;
@@ -253,9 +249,9 @@ static bool check_tag_token(TSLexer *lexer) {
 
 static bool check_closure(TSLexer *lexer, bool open, bool close) {
   return (open && (lexer->lookahead == '[' || lexer->lookahead == '(' ||
-                   lexer->lookahead == '{' || lexer->lookahead == '<')) //
-         || (close && (lexer->lookahead == ']' || lexer->lookahead == ')' ||
-                       lexer->lookahead == '}' || lexer->lookahead == '>'));
+                   lexer->lookahead == '{' || lexer->lookahead == '<')) ||
+         (close && (lexer->lookahead == ']' || lexer->lookahead == ')' ||
+                    lexer->lookahead == '}' || lexer->lookahead == '>'));
 }
 
 static bool check_segment(TSLexer *lexer) {
@@ -270,9 +266,7 @@ static bool istabspace(TSLexer *lexer) {
 }
 
 static bool indent_is_two_space_or_tab(int16_t indent_length) {
-  return (indent_length == 2    //
-          || indent_length == 9 //
-          || indent_length == 16);
+  return (indent_length == 2 || indent_length == 9 || indent_length == 16);
 }
 
 Bullet getbullet(TSLexer *lexer, bool bullet) {
@@ -306,18 +300,53 @@ Bullet getbullet(TSLexer *lexer, bool bullet) {
   return NOTABULLET;
 }
 
-enum StreamState {
-  DID_NOT_ADVANCE,
-  TAG_START_ADVANCED,
-  TAG_END_ADVANCED,
-  TAG_START_END_ADVANCED,
-};
-
 bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   if (in_error_recovery(valid_symbols))
     return false;
 
   scanner->is_at_section_start = false;
+
+  // Handle explicit tag newlines with active list-indent checks
+  if (valid_symbols[TAG_NL]) {
+    while (istabspace(lexer))
+      advance(lexer);
+    if (lexer->lookahead == '\r') {
+      advance(lexer);
+    }
+    if (lexer->lookahead == '\n') {
+      advance(lexer);
+
+      int16_t indent_length = 0;
+      while (true) {
+        if (lexer->lookahead == ' ') {
+          indent_length++;
+        } else if (lexer->lookahead == '\t') {
+          indent_length += 8;
+        } else {
+          break;
+        }
+        advance(lexer);
+      }
+
+      // Allow empty lines or lines with whitespace only inside multi-line tags
+      if (lexer->lookahead == '\n' || lexer->lookahead == '\r') {
+        lexer->result_symbol = TAG_NL;
+        return true;
+      }
+
+      // Check if we are inside a list item
+      if (scanner->indent_length_stack->len > 1) {
+        int16_t current_list_indent = VEC_BACK(scanner->indent_length_stack);
+        // Fail token validation if indented lower than the active listitem
+        if (indent_length < current_list_indent) {
+          return false;
+        }
+      }
+
+      lexer->result_symbol = TAG_NL;
+      return true;
+    }
+  }
 
   // - Section ends
   int16_t indent_length = 0;
@@ -386,49 +415,6 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   bool fenceable = true;
   bool segmentable = true;
 
-  if (valid_symbols[TAG_START] && check_closure(lexer, true, false)) {
-    int32_t expected_close = ']';
-    if (lexer->lookahead == '{')
-      expected_close = '}';
-    else if (lexer->lookahead == '(')
-      expected_close = ')';
-    else if (lexer->lookahead == '<')
-      expected_close = '>';
-
-    skip(lexer); // Consume the closure character
-
-    if (check_tag_token(lexer)) {
-      VEC_PUSH(scanner->tag_bracket_stack, expected_close);
-      VEC_PUSH(scanner->tag_token_stack, lexer->lookahead);
-      lexer->result_symbol = TAG_START;
-      return true;
-    }
-
-    // Fallback: We skipped a closure (e.g., '['), but it wasn't a tag start.
-    // Seed the loop state as if we just processed it inside the segment loop.
-    segments = 1;
-    fenceable = false;
-  } else if (valid_symbols[TAG_END]                                    //
-             && scanner->tag_bracket_stack->len > 0                    //
-             && lexer->lookahead == VEC_BACK(scanner->tag_token_stack) //
-  ) {
-    int32_t first_char = lexer->lookahead;
-    skip(lexer); // Consume the tag token delimiter
-
-    if (lexer->lookahead == VEC_BACK(scanner->tag_bracket_stack)) {
-      VEC_POP(scanner->tag_bracket_stack);
-      VEC_POP(scanner->tag_token_stack);
-      lexer->result_symbol = TAG_END;
-      return true;
-    }
-
-    // Fallback: We skipped a tag token delimiter (e.g., '@'), but it wasn't a
-    // tag end. Seed the loop state to account for the consumed delimiter.
-    segments = 1;
-    fence_char = first_char;
-    fence_width = 1;
-  }
-
   while (check_token(lexer) || check_delimiter(lexer) ||
          check_closure(lexer, true, true) //
   ) {
@@ -480,7 +466,6 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       } else if (VEC_BACK(scanner->fence_indent_stack) == indent_length &&
                  VEC_BACK(scanner->fence_width_stack) == fence_width &&
                  VEC_BACK(scanner->fence_char_stack) == fence_char) {
-        // closing fence: no suffix check, anything may follow
         VEC_POP(scanner->fence_indent_stack);
         VEC_POP(scanner->fence_width_stack);
         VEC_POP(scanner->fence_char_stack);
