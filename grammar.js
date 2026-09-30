@@ -16,6 +16,36 @@ const asciiSymbols = [
   '(', ')', '[', ']', '{', '}', '<', '>',
 ]
 
+const tagTokens = [
+  '@', '#', '$', '&', '%',
+  '!', '?', '\\', '/',
+  '-', '+', '*', '=', '~', '^',
+  '.', ',', ':', ';',
+]
+
+const tagBrackets = [
+  [ '[', ']' ],
+  [ '{', '}' ],
+  [ '(', ')' ],
+  [ '<', '>' ],
+]
+
+const tagQuotes = [
+  "'", '"', '`',
+]
+
+// const reTagName = /[a-zA-Z0-9_-]+[!?\\/\-+*=~^%@&#$]/;
+// const reTagKey = /[a-zA-Z0-9_-]/;
+const reTagName = /[a-zA-Z_][a-zA-Z0-9_-]*/;
+const reTagKey = reTagName;
+const reTagBracket = /[\[\]{}()<>]/;
+const reTagToken =/[.,:;!?\\/\-+*=~^%@&#$]/
+const reTagOpen = /[\[{(<][.,:;!?\\/\-_+*=~^%@&#$]/;
+const reTagClose = /[.,:;!?\\/\-_+*=~^%@&#$][\]})>]/;
+
+const reSegment = /[.,:;!?\\/'"`\-+*=~^%@&#$\[\](){}<>]/;
+const reFence = /[.,:;!?\\/'"`\-+*=~^%@&#$]+/;
+
 export default grammar({
   name: "fey",
 
@@ -30,6 +60,8 @@ export default grammar({
     $._signature,
     $._section_end,
     $._eof,  // Basically just '\0', but allows multiple to be matched
+    $._tag_start,
+    $._tag_end,
   ],
 
 
@@ -117,15 +149,14 @@ export default grammar({
 
     segment: $ => seq(
       alias(/[a-zA-Z0-9_]*/, 'index'),
-      alias(token.immediate(/[.,:;!?\\/'"`\-+*=~^%@&#$\[\](){}<>]/), 'delim'),
+      alias(token.immediate(reSegment), 'delim'),
     ),
 
-    // title: $ => seq(/[ \t]+/, /[^\r\n]*/),
-    title: $ => repeat1($.expr),
+    title: $ => $._tagged_expr_multi_line,
 
     paragraph: $ => seq(
       // optional($._directive_list),
-      $._multiline_text
+      $._multiline_tagged_text,
     ),
 
     list: $ => seq(
@@ -172,7 +203,7 @@ export default grammar({
     )),
 
     cell: $ => choice(seq(
-      field('contents', alias($._expr_line, $.contents)),
+      field('contents', alias($._tagged_expr_line, $.contents)),
       token(prec(1, '|')),
     ),
       alias(token(prec(1, /[ ]*\|/)), 'empty'),
@@ -184,10 +215,10 @@ export default grammar({
       $._eol,
     ),
     cbo_cell: $ => seq(
-      imm1(/[-]+/),
+      prim_1(/[-]+/),
       choice(
-        field('cb_corner', alias(imm1(/[v]/), $.cb_corner)),
-        imm1(/[*]/),
+        field('cb_corner', alias(prim_1(/[v]/), $.cb_corner)),
+        prim_1(/[*]/),
       ),
     ),
 
@@ -196,7 +227,7 @@ export default grammar({
       repeat1(field('cb_cell', $.cbe_cell)),
       $._eol,
     ),
-    cbe_cell: $ => seq(imm1(/[-]+/), imm1('^')),
+    cbe_cell: $ => seq(prim_1(/[-]+/), prim_1('^')),
 
     cbi: $ => seq(
       token(prec(1, '+')),
@@ -205,22 +236,22 @@ export default grammar({
     ),
     cbi_cell: $ => choice(
       alias(seq(
-        imm1(/[~]+/),
+        prim_1(/[~]+/),
         choice(
-          field('cb_corner', alias(imm1(/[+]/), $.cb_corner)),
-          imm1(/[*]/),
+          field('cb_corner', alias(prim_1(/[+]/), $.cb_corner)),
+          prim_1(/[*]/),
         )
       ), 'div'),
       field('cb_corner', alias(token(prec(1, /[ ]*[+]/)), $.vmerge)),
       seq(
-        field('contents', alias($._expr_line, $.contents)),
+        field('contents', alias($._tagged_expr_line, $.contents)),
         field('cb_corner', alias(token(prec(1, '+')), $.vmerge)),
       ),
     ),
 
     hr: $ => seq(
       token(prec(1, '+')),
-      repeat1(seq(imm1(/=+/), imm1(/[+]/))),
+      repeat1(seq(prim_1(/=+/), prim_1(/[+]/))),
       $._eol,
     ),
 
@@ -242,13 +273,15 @@ export default grammar({
       )),
       $._nl,
       optional(field('contents', $.contents)),
-      $._fence,
-      /[ \t]*/,
-      field('closefence', $.fence),
-      $._eol,
+      choice(seq(
+        $._fence,
+        /[ \t]*/,
+        field('closefence', $.fence),
+        $._eol,
+      ), $._eof),
     ),
 
-    fence: $ => /[.,:;!?\\/'"`\-+*=~^%@&#$]+/,
+    fence: $ => reFence,
 
     contents: $ => seq(
       optional(/[ \t]+/),
@@ -257,9 +290,64 @@ export default grammar({
       repeat(seq($._expr_line, repeat1($._nl))),
     ),
 
+    // simple_multi_tag: $ => prec.dynamic(1, choice(
+    simple_multi_tag: $ => choice(
+      seq(
+        $._tag_start,
+        alias(nim(reTagOpen), 'tag_start'),
+        repeat($._nl),
+        field('name', alias(nim(reTagName), 'tag_name')),
+        repeat($._nl),
+        repeat(seq( $.tag_value, repeat($._nl))),
+        $._tag_end,
+        alias(nim(reTagClose), 'tag_end'),
+      ),
+    ),
+    // )),
+
+    // simple_line_tag: $ => prec.dynamic(1, seq(
+    simple_line_tag: $ => seq(
+      $._tag_start,
+      alias(nim(reTagOpen), 'tag_start'),
+      field('name', alias(nim(reTagName), 'tag_name')),
+      repeat($.tag_value),
+      $._tag_end,
+      alias(nim(reTagClose), 'tag_end'),
+    ),
+    // )),
+
+    tag_value: $ => choice(
+      seq(
+        alias(nim(','), 'value_delimiter'),
+        field('arg_val', alias($._tag_value, 'value'))
+      ),
+      seq(
+        alias(nim(';'), 'value_delimiter'),
+        field('arg_keyval', alias(seq(
+          alias(nim(reTagKey), 'key'),
+          alias(nim(/[.:=]/), 'tag_delimiter'),
+          alias($._tag_value, 'value'),
+        ), 'keyval'))
+      ),
+    ),
+
+    _tag_value: $ => choice(
+      // tag_word(',;.:=' + tagQuotes.join('')),
+      tag_word(',;' + tagQuotes.join('')),
+
+      ...tagQuotes.map(q => seq(
+        nim(q),
+        repeat(tag_word(q)),
+        nim(q),
+      )),
+    ),
+
     _expr_line: $ => repeat1($.expr),
-    _multiline_text: $ => repeat1(
-      seq(repeat1($.expr), $._eol)
+    _tagged_expr_line: $ => repeat1(choice($.expr, $.simple_line_tag)),
+    _tagged_expr_multi_line: $ => repeat1(choice($.expr, $.simple_multi_tag)),
+
+    _multiline_tagged_text: $ => repeat1(
+      seq($._tagged_expr_multi_line, $._eol)
     ),
 
     expr: $ => seq(
@@ -272,6 +360,27 @@ export default grammar({
   }
 });
 
+
+function tag_word(skip) {
+  return seq(
+    tag_expr('non-immediate', token, skip),
+    repeat(tag_expr('immediate', token.immediate, skip)),
+  );
+}
+
+function tag_expr(pr, tfunc, skip = '') {
+  const esc = c => c.replace(/[\\\]\[^-]/g, '\\$&');
+  const chars = skip.split('');
+  const sym = new RegExp(`[^\\p{Z}\\p{L}\\p{N}\\t\\n\\r${chars.map(esc).join('')}]`);
+
+  return choice(
+    ...asciiSymbols.filter(c => !chars.includes(c)).map(c => tfunc(prec(pr, c))),
+    alias(tfunc(prec(pr, /\p{L}+/)), 'str'),
+    alias(tfunc(prec(pr, /\p{N}+/)), 'num'),
+    alias(tfunc(prec(pr, sym)), 'sym'),
+  );
+}
+
 function expr(pr, tfunc, skip = '') {
   skip = skip.split("")
   return choice(
@@ -279,12 +388,16 @@ function expr(pr, tfunc, skip = '') {
     alias(tfunc(prec(pr, /\p{L}+/)), 'str'),
     alias(tfunc(prec(pr, /\p{N}+/)), 'num'),
     alias(tfunc(prec(pr, /[^\p{Z}\p{L}\p{N}\t\n\r]/)), 'sym'),
-    // for checkboxes: ugly, but makes them work..
+     // for checkboxes: ugly, but makes them work..
     // alias(tfunc(prec(pr, 'x')), 'str'),
     // alias(tfunc(prec(pr, 'X')), 'str'),
   )
 }
 
-function imm1(item) {
+function sp_imm(item) { return token(prec.left('special', item)); }
+function sp_nim(item) { return token.immediate(prec('special', item)); }
+function nim(item) { return token(prec('non-immediate', item)); }
+function imm(item) { return token.immediate(prec('immediate', item)); }
+function prim_1(item) {
   return token.immediate(prec(1, item));
 }

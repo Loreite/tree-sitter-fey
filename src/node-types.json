@@ -5,7 +5,7 @@
     "fields": {
       "closefence": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "fence",
@@ -223,6 +223,10 @@
         {
           "type": "expr",
           "named": true
+        },
+        {
+          "type": "simple_line_tag",
+          "named": true
         }
       ]
     }
@@ -361,10 +365,14 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
         {
           "type": "expr",
+          "named": true
+        },
+        {
+          "type": "simple_multi_tag",
           "named": true
         }
       ]
@@ -487,6 +495,58 @@
     }
   },
   {
+    "type": "simple_line_tag",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "tag_name",
+            "named": false
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "tag_value",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "simple_multi_tag",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "tag_name",
+            "named": false
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "tag_value",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "table",
     "named": true,
     "fields": {
@@ -521,6 +581,40 @@
     }
   },
   {
+    "type": "tag_value",
+    "named": true,
+    "fields": {
+      "arg_keyval": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "key",
+            "named": false
+          },
+          {
+            "type": "tag_delimiter",
+            "named": false
+          },
+          {
+            "type": "value",
+            "named": false
+          }
+        ]
+      },
+      "arg_val": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "value",
+            "named": false
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "title",
     "named": true,
     "fields": {},
@@ -531,9 +625,18 @@
         {
           "type": "expr",
           "named": true
+        },
+        {
+          "type": "simple_multi_tag",
+          "named": true
         }
       ]
     }
+  },
+  {
+    "type": "value",
+    "named": false,
+    "fields": {}
   },
   {
     "type": "\n",
@@ -688,6 +791,10 @@
     "named": false
   },
   {
+    "type": "key",
+    "named": false
+  },
+  {
     "type": "num",
     "named": false
   },
@@ -700,7 +807,27 @@
     "named": false
   },
   {
+    "type": "tag_delimiter",
+    "named": false
+  },
+  {
+    "type": "tag_end",
+    "named": false
+  },
+  {
+    "type": "tag_name",
+    "named": false
+  },
+  {
+    "type": "tag_start",
+    "named": false
+  },
+  {
     "type": "v",
+    "named": false
+  },
+  {
+    "type": "value_delimiter",
     "named": false
   },
   {

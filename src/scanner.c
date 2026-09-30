@@ -48,6 +48,8 @@ enum TokenType {
   SIGNATURE,
   SECTION_END,
   ENDOFFILE,
+  TAG_START,
+  TAG_END,
 };
 
 typedef enum {
@@ -65,6 +67,9 @@ typedef struct {
   stack *indent_length_stack;
   stack *bullet_stack;
   stack *section_stack;
+
+  stack *tag_bracket_stack;
+  stack *tag_token_stack;
 
   stack *fence_indent_stack;
   stack *fence_width_stack;
@@ -88,6 +93,12 @@ unsigned serialize(Scanner *scanner, char *buffer) {
     buffer[i++] = scanner->fence_indent_stack->data[0];
     buffer[i++] = scanner->fence_width_stack->data[0];
     buffer[i++] = scanner->fence_char_stack->data[0];
+  }
+
+  buffer[i++] = scanner->tag_bracket_stack->len;
+  if (scanner->tag_bracket_stack->len > 0) {
+    buffer[i++] = scanner->tag_bracket_stack->data[0];
+    buffer[i++] = scanner->tag_token_stack->data[0];
   }
 
   size_t indent_count = scanner->indent_length_stack->len - 1;
@@ -131,6 +142,9 @@ void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
   VEC_CLEAR(scanner->fence_width_stack);
   VEC_CLEAR(scanner->fence_char_stack);
 
+  VEC_CLEAR(scanner->tag_bracket_stack);
+  VEC_CLEAR(scanner->tag_token_stack);
+
   scanner->base_indent = -1;
 
   if (length == 0)
@@ -151,6 +165,12 @@ void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
     VEC_PUSH(scanner->fence_char_stack, buffer[i++]);
   }
 
+  uint8_t tag_len = (uint8_t)buffer[i++];
+  if (tag_len > 0) {
+    VEC_PUSH(scanner->tag_bracket_stack, buffer[i++]);
+    VEC_PUSH(scanner->tag_token_stack, buffer[i++]);
+  }
+
   size_t indent_count = (uint8_t)buffer[i++];
 
   // Use independent loop counter (j) so 'i' can safely track the buffer index
@@ -169,13 +189,16 @@ void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
 }
 
 static bool in_error_recovery(const bool *valid_symbols) {
-  return (valid_symbols[LIST_START]                                 //
-          && valid_symbols[LIST_END]                                //
-          && valid_symbols[LISTITEM_END]                            //
-          && valid_symbols[BULLET]                                  //
-          && valid_symbols[FENCE]                                   //
-          && valid_symbols[SIGNATURE]                               //
-          && valid_symbols[SECTION_END] && valid_symbols[ENDOFFILE] //
+  return (valid_symbols[LIST_START]      //
+          && valid_symbols[LIST_END]     //
+          && valid_symbols[LISTITEM_END] //
+          && valid_symbols[BULLET]       //
+          && valid_symbols[FENCE]        //
+          && valid_symbols[SIGNATURE]    //
+          && valid_symbols[SECTION_END]  //
+          && valid_symbols[ENDOFFILE]    //
+          && valid_symbols[TAG_START]    //
+          && valid_symbols[TAG_END]      //
   );
 }
 
@@ -210,6 +233,22 @@ static bool check_delimiter(TSLexer *lexer) {
           lexer->lookahead == '=' || lexer->lookahead == '~' ||
           lexer->lookahead == '@' || lexer->lookahead == '&' ||
           lexer->lookahead == '#' || lexer->lookahead == '$');
+}
+
+static bool check_tag_token(TSLexer *lexer) {
+  return ( //
+      lexer->lookahead == '.' || lexer->lookahead == ',' ||
+      lexer->lookahead == ':' || lexer->lookahead == ';' ||
+      lexer->lookahead == '!' || lexer->lookahead == '?' ||
+      lexer->lookahead == '/' || lexer->lookahead == '\\' ||
+      lexer->lookahead == '-' || lexer->lookahead == '+' ||
+      lexer->lookahead == '*' || lexer->lookahead == '^' ||
+      lexer->lookahead == '%' || lexer->lookahead == '=' ||
+      lexer->lookahead == '~' || lexer->lookahead == '@' ||
+      lexer->lookahead == '&' || lexer->lookahead == '#' ||
+      lexer->lookahead == '$'
+      //
+  );
 }
 
 static bool check_closure(TSLexer *lexer, bool open, bool close) {
@@ -266,6 +305,13 @@ Bullet getbullet(TSLexer *lexer, bool bullet) {
 
   return NOTABULLET;
 }
+
+enum StreamState {
+  DID_NOT_ADVANCE,
+  TAG_START_ADVANCED,
+  TAG_END_ADVANCED,
+  TAG_START_END_ADVANCED,
+};
 
 bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   if (in_error_recovery(valid_symbols))
@@ -339,6 +385,50 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   int16_t fence_width = 0;
   bool fenceable = true;
   bool segmentable = true;
+
+  if (valid_symbols[TAG_START] && check_closure(lexer, true, false)) {
+    int32_t expected_close = ']';
+    if (lexer->lookahead == '{')
+      expected_close = '}';
+    else if (lexer->lookahead == '(')
+      expected_close = ')';
+    else if (lexer->lookahead == '<')
+      expected_close = '>';
+
+    skip(lexer); // Consume the closure character
+
+    if (check_tag_token(lexer)) {
+      VEC_PUSH(scanner->tag_bracket_stack, expected_close);
+      VEC_PUSH(scanner->tag_token_stack, lexer->lookahead);
+      lexer->result_symbol = TAG_START;
+      return true;
+    }
+
+    // Fallback: We skipped a closure (e.g., '['), but it wasn't a tag start.
+    // Seed the loop state as if we just processed it inside the segment loop.
+    segments = 1;
+    fenceable = false;
+  } else if (valid_symbols[TAG_END]                                    //
+             && scanner->tag_bracket_stack->len > 0                    //
+             && lexer->lookahead == VEC_BACK(scanner->tag_token_stack) //
+  ) {
+    int32_t first_char = lexer->lookahead;
+    skip(lexer); // Consume the tag token delimiter
+
+    if (lexer->lookahead == VEC_BACK(scanner->tag_bracket_stack)) {
+      VEC_POP(scanner->tag_bracket_stack);
+      VEC_POP(scanner->tag_token_stack);
+      lexer->result_symbol = TAG_END;
+      return true;
+    }
+
+    // Fallback: We skipped a tag token delimiter (e.g., '@'), but it wasn't a
+    // tag end. Seed the loop state to account for the consumed delimiter.
+    segments = 1;
+    fence_char = first_char;
+    fence_width = 1;
+  }
+
   while (check_token(lexer) || check_delimiter(lexer) ||
          check_closure(lexer, true, true) //
   ) {
@@ -380,7 +470,6 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
 
     if (valid_symbols[FENCE] && fence_width >= 3) {
       if (scanner->fence_indent_stack->len == 0) {
-        // opening fence: keep the suffix requirement
         if (valid_fence_suffix) {
           VEC_PUSH(scanner->fence_indent_stack, indent_length);
           VEC_PUSH(scanner->fence_width_stack, fence_width);
@@ -470,6 +559,9 @@ void *tree_sitter_fey_external_scanner_create() {
   scanner->bullet_stack = (stack *)calloc(1, sizeof(stack));
   scanner->section_stack = (stack *)calloc(1, sizeof(stack));
 
+  scanner->tag_bracket_stack = (stack *)calloc(1, sizeof(stack));
+  scanner->tag_token_stack = (stack *)calloc(1, sizeof(stack));
+
   scanner->fence_indent_stack = (stack *)calloc(1, sizeof(stack));
   scanner->fence_width_stack = (stack *)calloc(1, sizeof(stack));
   scanner->fence_char_stack = (stack *)calloc(1, sizeof(stack));
@@ -505,6 +597,9 @@ void tree_sitter_fey_external_scanner_destroy(void *payload) {
   VEC_FREE(scanner->bullet_stack);
   VEC_FREE(scanner->section_stack);
 
+  VEC_FREE(scanner->tag_bracket_stack);
+  VEC_FREE(scanner->tag_token_stack);
+
   VEC_FREE(scanner->fence_indent_stack);
   VEC_FREE(scanner->fence_width_stack);
   VEC_FREE(scanner->fence_char_stack);
@@ -512,6 +607,9 @@ void tree_sitter_fey_external_scanner_destroy(void *payload) {
   free(scanner->fence_indent_stack);
   free(scanner->fence_width_stack);
   free(scanner->fence_char_stack);
+
+  free(scanner->tag_bracket_stack);
+  free(scanner->tag_token_stack);
 
   free(scanner->indent_length_stack);
   free(scanner->bullet_stack);
