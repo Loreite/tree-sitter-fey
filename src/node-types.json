@@ -225,7 +225,7 @@
           "named": true
         },
         {
-          "type": "simple_line_tag",
+          "type": "simple_tag",
           "named": true
         }
       ]
@@ -372,7 +372,7 @@
           "named": true
         },
         {
-          "type": "simple_multi_tag",
+          "type": "simple_tag",
           "named": true
         }
       ]
@@ -495,55 +495,53 @@
     }
   },
   {
-    "type": "simple_line_tag",
+    "type": "simple_tag",
     "named": true,
     "fields": {
+      "key_value": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "value",
+            "named": true
+          }
+        ]
+      },
       "name": {
         "multiple": false,
         "required": true,
         "types": [
           {
             "type": "tag_name",
-            "named": false
+            "named": true
           }
         ]
-      }
-    },
-    "children": {
-      "multiple": true,
-      "required": false,
-      "types": [
-        {
-          "type": "tag_value",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "simple_multi_tag",
-    "named": true,
-    "fields": {
-      "name": {
-        "multiple": false,
+      },
+      "tag_closure": {
+        "multiple": true,
         "required": true,
         "types": [
           {
-            "type": "tag_name",
-            "named": false
+            "type": "tag_end",
+            "named": true
+          },
+          {
+            "type": "tag_start",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "value",
+            "named": true
           }
         ]
       }
-    },
-    "children": {
-      "multiple": true,
-      "required": false,
-      "types": [
-        {
-          "type": "tag_value",
-          "named": true
-        }
-      ]
     }
   },
   {
@@ -581,40 +579,6 @@
     }
   },
   {
-    "type": "tag_value",
-    "named": true,
-    "fields": {
-      "arg_keyval": {
-        "multiple": true,
-        "required": false,
-        "types": [
-          {
-            "type": "key",
-            "named": false
-          },
-          {
-            "type": "tag_delimiter",
-            "named": false
-          },
-          {
-            "type": "value",
-            "named": false
-          }
-        ]
-      },
-      "arg_val": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "value",
-            "named": false
-          }
-        ]
-      }
-    }
-  },
-  {
     "type": "title",
     "named": true,
     "fields": {},
@@ -627,7 +591,7 @@
           "named": true
         },
         {
-          "type": "simple_multi_tag",
+          "type": "simple_tag",
           "named": true
         }
       ]
@@ -635,8 +599,29 @@
   },
   {
     "type": "value",
-    "named": false,
-    "fields": {}
+    "named": true,
+    "fields": {
+      "key": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "key",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "value",
+            "named": true
+          }
+        ]
+      }
+    }
   },
   {
     "type": "\n",
@@ -783,6 +768,10 @@
     "named": false
   },
   {
+    "type": "escape",
+    "named": false
+  },
+  {
     "type": "fence",
     "named": true
   },
@@ -792,7 +781,7 @@
   },
   {
     "type": "key",
-    "named": false
+    "named": true
   },
   {
     "type": "num",
@@ -812,22 +801,18 @@
   },
   {
     "type": "tag_end",
-    "named": false
+    "named": true
   },
   {
     "type": "tag_name",
-    "named": false
+    "named": true
   },
   {
     "type": "tag_start",
-    "named": false
+    "named": true
   },
   {
     "type": "v",
-    "named": false
-  },
-  {
-    "type": "value_delimiter",
     "named": false
   },
   {

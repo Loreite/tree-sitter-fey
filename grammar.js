@@ -43,6 +43,9 @@ const reTagToken =/[.,:;!?\\/\-+*=~^%@&#$]/
 const reTagOpen = /[\[{(<][.,:;!?\\/\-_+*=~^%@&#$]/;
 const reTagClose = /[.,:;!?\\/\-_+*=~^%@&#$][\]})>]/;
 
+const reCellEscape = /\\[|+*~\\]/;
+const esc = c => c.replace(/[\\\]\[^-]/g, '\\$&');
+
 const reSegment = /[.,:;!?\\/'"`\-+*=~^%@&#$\[\](){}<>]/;
 const reFence = /[.,:;!?\\/'"`\-+*=~^%@&#$]+/;
 
@@ -202,7 +205,7 @@ export default grammar({
     )),
 
     cell: $ => choice(seq(
-      field('contents', alias($._tagged_expr_line, $.contents)),
+      field('contents', alias($._tagged_cell_line, $.contents)),
       token(prec(1, '|')),
     ),
       alias(token(prec(1, /[ ]*\|/)), 'empty'),
@@ -243,7 +246,7 @@ export default grammar({
       ), 'div'),
       field('cb_corner', alias(token(prec(1, /[ ]*[+]/)), $.vmerge)),
       seq(
-        field('contents', alias($._tagged_expr_line, $.contents)),
+        field('contents', alias($._tagged_cell_line, $.contents)),
         field('cb_corner', alias(token(prec(1, '+')), $.vmerge)),
       ),
     ),
@@ -292,13 +295,13 @@ export default grammar({
     simple_multi_tag: $ => choice(
       ...tagBrackets.flatMap(([open, close]) =>
         tagTokens.map(tok => seq(
-          alias(seq(nim(open), imm(tok)), 'tag_start'),
+          field('tag_closure', alias(token(seq(nim(open), imm(tok))), $.tag_start)),
 
           repeat($._tag_nl),
-          field('name', alias(nim(reTagName), 'tag_name')),
-          repeat(seq($.tag_value, repeat($._tag_nl))),
+          field('name', alias(nim(reTagName), $.tag_name)),
+          repeat(seq($._tag_value_choice, repeat($._tag_nl))),
 
-          alias(seq(nim(tok), imm(close)), 'tag_end')
+          field('tag_closure', alias(token(seq(nim(tok), imm(close))), $.tag_end))
         ))
       )
     ),
@@ -306,34 +309,37 @@ export default grammar({
     simple_line_tag: $ => choice(
       ...tagBrackets.flatMap(([open, close]) =>
         tagTokens.map(tok => seq(
-          alias(seq(nim(open), imm(tok)), 'tag_start'),
+          field('tag_closure', alias(token(seq(nim(open), imm(tok))), $.tag_start)),
 
-          field('name', alias(nim(reTagName), 'tag_name')),
-          repeat($.tag_value),
+          field('name', alias(nim(reTagName), $.tag_name)),
+          repeat($._tag_value_choice),
 
-          alias(seq(nim(tok), imm(close)), 'tag_end')
+          field('tag_closure', alias(token(seq(nim(tok), imm(close))), $.tag_end))
         ))
       )
     ),
 
-    tag_value: $ => choice(
+    _tag_value_choice: $ => choice(
       seq(
-        alias(nim(','), 'value_delimiter'),
+        alias(nim(','), 'tag_delimiter'),
         repeat($._tag_nl),
-        field('arg_val', alias($._tag_value, 'value'))
+        field('value', alias($._tag_value, $.value))
       ),
       seq(
-        alias(nim(';'), 'value_delimiter'),
+        alias(nim(';'), 'tag_delimiter'),
         repeat($._tag_nl),
-        field('arg_keyval', alias(seq(
-          alias(nim(reTagKey), 'key'),
-          alias(nim(/[.:=]/), 'tag_delimiter'),
-          alias($._tag_value, 'value'),
-        ), 'keyval'))
+        field('key_value', alias($._tag_key_value, $.value))
       ),
     ),
 
+    _tag_key_value: $ => seq(
+      field('key', alias(nim(reTagKey), $.key)),
+      alias(nim(/[.:=]/), 'tag_delimiter'),
+      field('value', alias($._tag_value, $.value)),
+    ),
+
     _tag_value: $ => choice(
+      // alias(token(tag_word(',;' + tagQuotes.join(''))), 'bare'),
       tag_word(',;' + tagQuotes.join('')),
 
       ...tagQuotes.map(q => seq(
@@ -341,11 +347,26 @@ export default grammar({
         repeat(tag_word(q)),
         nim(q),
       )),
+      // ...tagQuotes.map(q => alias(token(seq(
+      //   nim(q),
+      //   repeat(tag_word(q)),
+      //   nim(q),
+      // )), 'quoted')),
     ),
 
     _expr_line: $ => repeat1($.expr),
-    _tagged_expr_line: $ => repeat1(choice($.expr, $.simple_line_tag)),
-    _tagged_expr_multi_line: $ => repeat1(choice($.expr, $.simple_multi_tag)),
+
+    _tagged_cell_line: $ => repeat1(choice(
+      alias($.cell_expr, $.expr), alias($.simple_line_tag, $.simple_tag)
+    )),
+
+    _tagged_expr_line: $ => repeat1(choice(
+      $.expr, alias($.simple_line_tag, $.simple_tag)
+    )),
+
+    _tagged_expr_multi_line: $ => repeat1(choice(
+      $.expr, alias($.simple_multi_tag, $.simple_tag)
+    )),
 
     _multiline_tagged_text: $ => repeat1(
       seq($._tagged_expr_multi_line, $._eol)
@@ -355,6 +376,12 @@ export default grammar({
       expr('non-immediate', token),
       repeat(expr('immediate', token.immediate))
     ),
+
+    cell_expr: $ => seq(
+      expr('non-immediate', token, '', true),
+      repeat(expr('immediate', token.immediate, '', true)),
+    ),
+
 
     _nl: _ => choice('\r\n', '\r', '\n'),
     _eol: $ => choice($._nl, $._eof),
@@ -370,11 +397,17 @@ function tag_word(skip) {
 }
 
 function tag_expr(pr, tfunc, skip = '') {
-  const esc = c => c.replace(/[\\\]\[^-]/g, '\\$&');
   const chars = skip.split('');
   const sym = new RegExp(`[^\\p{Z}\\p{L}\\p{N}\\t\\n\\r${chars.map(esc).join('')}]`);
 
+  // escapes for any quote chars in skip, plus \\ 
+  const quotes = chars.filter(c => tagQuotes.includes(c));
+  const escapes = quotes.length
+    ? [alias(tfunc(prec(pr, new RegExp(`\\\\[${quotes.join('')}\\\\]`))), 'escape')]
+    : [];
+
   return choice(
+    ...escapes,
     ...asciiSymbols.filter(c => !chars.includes(c)).map(c => tfunc(prec(pr, c))),
     alias(tfunc(prec(pr, /\p{L}+/)), 'str'),
     alias(tfunc(prec(pr, /\p{N}+/)), 'num'),
@@ -382,16 +415,14 @@ function tag_expr(pr, tfunc, skip = '') {
   );
 }
 
-function expr(pr, tfunc, skip = '') {
+function expr(pr, tfunc, skip = '', cell = false) {
   skip = skip.split("")
   return choice(
+    ...(cell ? [alias(tfunc(prec(pr, reCellEscape)), 'escape')] : []),
     ...asciiSymbols.filter(c => !skip.includes(c)).map(c => tfunc(prec(pr, c))),
     alias(tfunc(prec(pr, /\p{L}+/)), 'str'),
     alias(tfunc(prec(pr, /\p{N}+/)), 'num'),
     alias(tfunc(prec(pr, /[^\p{Z}\p{L}\p{N}\t\n\r]/)), 'sym'),
-     // for checkboxes: ugly, but makes them work..
-    // alias(tfunc(prec(pr, 'x')), 'str'),
-    // alias(tfunc(prec(pr, 'X')), 'str'),
   )
 }
 
