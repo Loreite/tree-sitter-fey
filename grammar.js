@@ -299,7 +299,9 @@ export default grammar({
 
           repeat($._tag_nl),
           field('name', alias(nim(reTagName), $.tag_name)),
-          repeat(seq($._tag_value_choice, repeat($._tag_nl))),
+          repeat($._tag_multi_value_choice),
+          optional(choice(nim(','), nim(';'))),
+          repeat($._tag_nl),
 
           field('tag_closure', alias(token(seq(nim(tok), imm(close))), $.tag_end))
         ))
@@ -312,14 +314,15 @@ export default grammar({
           field('tag_closure', alias(token(seq(nim(open), imm(tok))), $.tag_start)),
 
           field('name', alias(nim(reTagName), $.tag_name)),
-          repeat($._tag_value_choice),
+          repeat($._tag_line_value_choice),
+          optional(choice(nim(','), nim(';'))),
 
           field('tag_closure', alias(token(seq(nim(tok), imm(close))), $.tag_end))
         ))
       )
     ),
 
-    _tag_value_choice: $ => choice(
+    _tag_multi_value_choice: $ => choice(
       seq(
         alias(nim(','), 'tag_delimiter'),
         repeat($._tag_nl),
@@ -328,6 +331,17 @@ export default grammar({
       seq(
         alias(nim(';'), 'tag_delimiter'),
         repeat($._tag_nl),
+        field('key_value', alias($._tag_key_value, $.value))
+      ),
+    ),
+
+    _tag_line_value_choice: $ => choice(
+      seq(
+        alias(nim(','), 'tag_delimiter'),
+        field('value', alias($._tag_value, $.value))
+      ),
+      seq(
+        alias(nim(';'), 'tag_delimiter'),
         field('key_value', alias($._tag_key_value, $.value))
       ),
     ),
