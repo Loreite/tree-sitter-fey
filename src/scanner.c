@@ -366,9 +366,11 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
 
       // Check if we are inside a list item
       if (scanner->indent_length_stack->len > 1) {
-        if (indent_length < VEC_BACK(scanner->indent_length_stack)        //
-            || indent_length < VEC_BACK(scanner->tag_indent_length_stack) //
-        ) {
+        if (indent_length < VEC_BACK(scanner->indent_length_stack)) {
+          return false;
+        }
+      } else if (scanner->tag_indent_length_stack->len > 1) {
+        if (indent_length < VEC_BACK(scanner->tag_indent_length_stack)) {
           return false;
         }
       }

@@ -69,16 +69,6 @@
           }
         ]
       },
-      "head": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "head",
-            "named": true
-          }
-        ]
-      },
       "key_value": {
         "multiple": true,
         "required": false,
@@ -336,25 +326,6 @@
     "type": "expr",
     "named": true,
     "fields": {}
-  },
-  {
-    "type": "head",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "expr",
-          "named": true
-        },
-        {
-          "type": "simple_tag",
-          "named": true
-        }
-      ]
-    }
   },
   {
     "type": "heading",

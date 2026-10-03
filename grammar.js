@@ -304,10 +304,13 @@ export default grammar({
       $._block_tag_start,
       /[ \t]*/,
       $._block_tag_open,
-      /[ \t]{2,}/,
-      field('head', optional(alias($._tagged_expr_line, $.head))),
-      $._eol,
-      optional(field('body', $.body)),
+      
+      // field('head', optional(alias($._tagged_expr_line, $.head))),
+      choice(
+        $._eol,
+        seq($._nl, field('body', $.body)),
+        seq(/[ \t]{2,}/, field('body', $.body)),
+      ),
       $._block_tag_end,
     ),
 
@@ -317,7 +320,7 @@ export default grammar({
         repeat($._tag_nl),
         field('name', alias(nim(reTagName), $.tag_name)),
         repeat($._tag_multi_value_choice),
-        optional(choice(nim(','), nim(';'))),
+        optional(alias(choice(nim(','), nim(';')), 'tag_delimiter')),
         repeat($._tag_nl),
         field('tag_closure', alias(
           token(prec('non-immediate', seq(close, reTagToken))), $.tag_end)),
@@ -332,7 +335,7 @@ export default grammar({
           repeat($._tag_nl),
           field('name', alias(nim(reTagName), $.tag_name)),
           repeat($._tag_multi_value_choice),
-          optional(choice(nim(','), nim(';'))),
+        optional(alias(choice(nim(','), nim(';')), 'tag_delimiter')),
           repeat($._tag_nl),
 
           field('tag_closure', alias(token(seq(nim(tok), imm(close))), $.tag_end))
@@ -347,7 +350,7 @@ export default grammar({
 
           field('name', alias(nim(reTagName), $.tag_name)),
           repeat($._tag_line_value_choice),
-          optional(choice(nim(','), nim(';'))),
+        optional(alias(choice(nim(','), nim(';')), 'tag_delimiter')),
 
           field('tag_closure', alias(token(seq(nim(tok), imm(close))), $.tag_end))
         ))
