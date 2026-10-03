@@ -79,6 +79,10 @@ export default grammar({
     $._pair_block_start,  // block opener: `[ name #]` then end of line
     $._pair_close_start,  // closer `[# name ]` matching the innermost opener (pops)
     $._pair_stray_close,  // closer whose name/bracket/token does not match
+    // Line break between two words of a multi-line tag value. The scanner
+    // only emits it when the next line does NOT start with a tag closer
+    // (`]`, `#]`, `]#`, ...); otherwise it emits _tag_nl so tag_close wins.
+    $._tag_value_nl,
   ],
 
 
@@ -403,7 +407,8 @@ export default grammar({
 
     pair_tag: $ => seq(
       field('open', $.pair_open),
-      repeat(choice($._inline_item, $._tag_nl)),
+      optional(field('body', $.body)),
+      // repeat(choice($._inline_item, $._tag_nl)),
       field('close', $.pair_close),
     ),
 
@@ -491,11 +496,11 @@ export default grammar({
     _tag_line_value_choice: $ => choice(
       seq(
         alias(nim(','), 'tag_delimiter'),
-        field('value', alias($._tag_value, $.value))
+        field('value', alias($._tag_line_value, $.value))
       ),
       seq(
         alias(nim(';'), 'tag_delimiter'),
-        field('key_value', alias($._tag_key_value, $.value))
+        field('key_value', alias($._tag_line_key_value, $.value))
       ),
     ),
 
@@ -505,9 +510,25 @@ export default grammar({
       field('value', alias($._tag_value, $.value)),
     ),
 
+    _tag_line_key_value: $ => seq(
+      field('key', alias(nim(reTagKey), $.key)),
+      alias(nim(/[.:=]/), 'tag_delimiter'),
+      field('value', alias($._tag_line_value, $.value)),
+    ),
+
     // A value word may not START with a closing bracket: otherwise ` ]` ties
     // with the bracket-only closer of line_tag and the word wins the lexer tie.
-    _tag_value: $ => repeat1(tag_word(',;', ']})>')),
+    //
+    // Multi-line value (tag heads that may span lines): words may be split
+    // across lines. The separator is _tag_value_nl, never _tag_nl, so a
+    // newline before the closer stays unambiguous (see externals).
+    _tag_value: $ => seq(
+      tag_word(',;', ']})>'),
+      repeat(seq(optional($._tag_value_nl), tag_word(',;', ']})>'))),
+    ),
+
+    // Single-line value, for simple_line_tag (table cells).
+    _tag_line_value: $ => repeat1(tag_word(',;', ']})>')),
 
     _expr_line: $ => repeat1($.expr),
 

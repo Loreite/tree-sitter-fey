@@ -66,6 +66,7 @@ enum TokenType {
   PAIR_BLOCK_START,
   PAIR_CLOSE_START,
   PAIR_STRAY_CLOSE,
+  TAG_VALUE_NL,
 };
 
 typedef enum {
@@ -861,35 +862,44 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   scanner->is_at_section_start = false;
   uint32_t skipped = 0;
 
-  // Handle explicit tag newlines with active list-indent checks
-  if (valid_symbols[TAG_NL]) {
+  // Handle explicit tag newlines with active list-indent checks.
+  //
+  // TAG_VALUE_NL and TAG_NL both consume the line break(s) and the following
+  // indentation. When both are valid (right after a word of a multi-line
+  // value), peek at the next line: if it starts with a tag closer (`]`,
+  // `#]`, `]#`, ...) it is TAG_NL (the start of tag_close), otherwise the
+  // value continues and it is TAG_VALUE_NL.
+  if (valid_symbols[TAG_NL] || valid_symbols[TAG_VALUE_NL]) {
     while (istabspace(lexer)) {
       skip(lexer); // not part of the token (and not of any zero-width one)
       skipped++;
     }
-    if (lexer->lookahead == '\r') {
-      advance(lexer);
-    }
-    if (lexer->lookahead == '\n') {
-      advance(lexer);
-
+    if (check_nl(lexer)) {
       int16_t indent_length = 0;
-      while (true) {
-        if (lexer->lookahead == ' ') {
-          indent_length++;
-        } else if (lexer->lookahead == '\t') {
-          indent_length += 8;
-        } else {
-          break;
+      bool blank_only = false;
+      // consume this line break, plus any whitespace-only lines after it
+      while (check_nl(lexer)) {
+        if (lexer->lookahead == '\r')
+          advance(lexer);
+        if (lexer->lookahead == '\n')
+          advance(lexer);
+        indent_length = 0;
+        while (true) {
+          if (lexer->lookahead == ' ') {
+            indent_length++;
+          } else if (lexer->lookahead == '\t') {
+            indent_length += 8;
+          } else {
+            break;
+          }
+          advance(lexer);
         }
-        advance(lexer);
+        // A value may not run into a blank line (same as the opener
+        // lookahead in scan_open_shape); a tag closer may follow one.
+        if (check_nl(lexer))
+          blank_only = true;
       }
-
-      // Allow empty lines or lines with whitespace only inside multi-line tags
-      if (lexer->lookahead == '\n' || lexer->lookahead == '\r') {
-        lexer->result_symbol = TAG_NL;
-        return true;
-      }
+      lexer->mark_end(lexer);
 
       // Check if we are inside a list item
       if (scanner->indent_length_stack->len > 1) {
@@ -902,8 +912,23 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
         }
       }
 
-      lexer->result_symbol = TAG_NL;
-      return true;
+      bool closer = false;
+      if (check_closure(lexer, false, true)) {
+        closer = true; // `]`, `]#`
+      } else if (check_tag_token(lexer)) {
+        advance(lexer); // peek only: the token already ends at mark_end
+        closer = check_closure(lexer, false, true); // `#]`
+      }
+
+      if (!closer && !blank_only && valid_symbols[TAG_VALUE_NL]) {
+        lexer->result_symbol = TAG_VALUE_NL;
+        return true;
+      }
+      if (valid_symbols[TAG_NL]) {
+        lexer->result_symbol = TAG_NL;
+        return true;
+      }
+      return false;
     }
   }
 
