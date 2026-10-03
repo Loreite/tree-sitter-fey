@@ -39,6 +39,8 @@ const tagQuotes = [
 const reTagName = /[a-zA-Z_][a-zA-Z0-9_-]*/;
 const reTagKey = reTagName;
 const reTagBracket = /[\[\]{}()<>]/;
+const reTagOpenBracket = /[\[{(<]/;
+const reTagCloseBracket = /[\]})>]/;
 const reTagToken =/[.,:;!?\\/\-+*=~^%@&#$]/
 const reTagOpen = /[\[{(<][.,:;!?\\/\-_+*=~^%@&#$]/;
 const reTagClose = /[.,:;!?\\/\-_+*=~^%@&#$][\]})>]/;
@@ -70,6 +72,13 @@ export default grammar({
     $._section_end,
     $._eof,  // Basically just '\0', but allows multiple to be matched
     $._tag_nl,
+    // Pair tags. All four are decided by scanner lookahead; the first three
+    // are zero-width (the grammar lexes the brackets), the stray closer
+    // covers the whole mismatched `[# name ]`.
+    $._pair_open_start,   // inline opener `[ name #]` (pushes the name)
+    $._pair_block_start,  // block opener: `[ name #]` then end of line
+    $._pair_close_start,  // closer `[# name ]` matching the innermost opener (pops)
+    $._pair_stray_close,  // closer whose name/bracket/token does not match
   ],
 
 
@@ -137,6 +146,7 @@ export default grammar({
       $.table,
       $.block,
       $.block_tag,
+      $.block_pair_tag,
       $.standalone_simple_tag,
     ),
 
@@ -306,23 +316,30 @@ export default grammar({
       repeat(seq($._expr_line, repeat1($._nl))),
     ),
 
-    // 76 thin alternatives (sigil x bracket). The expensive pieces (the head with
-    // name/values, and the sigil-specific body) are shared rules; only the
-    // start/close tokens vary per alternative.
+    // 76 thin alternatives (sigil x bracket). The expensive pieces are shared
+    // hidden rules: the head + bracket closer is one rule per BRACKET (4), the
+    // body + terminator one rule per SIGIL (19). Sharing the head across
+    // sigils keeps bracket matching strict while cutting the parse table by
+    // ~15k actions (the old inline head was duplicated per sigil).
     line_tag: $ => choice(
       ...tagTokens.flatMap((tok, ti) =>
-        tagBrackets.map(([open, close]) => seq(
+        tagBrackets.map(([open, close], bi) => seq(
           field('tag_closure', alias(
             token(seq(sp_nim(tok), imm(open), imm(reWs))), $.tag_start)
           ),
-          $._tag_head,
-          tag_close($, ws_end(close), bare_end(close)),
+          $[`_line_tag_head_${bi}`],
           $[`_line_tag_tail_${ti}`],
         )),
       )
     ),
 
-    // Shared by line_tag and simple_multi_tag.
+    // one per bracket: name/values + the bracket-matching closer
+    ...Object.fromEntries(tagBrackets.map(([open, close], bi) => [
+      `_line_tag_head_${bi}`,
+      $ => seq($._tag_head, tag_close($, ws_end(close), bare_end(close))),
+    ])),
+
+    // Shared by line_tag, simple_multi_tag and pair_open.
     _tag_head: $ => seq(
       repeat($._tag_nl),
       field('name', alias(nim(reTagName), $.tag_name)),
@@ -368,6 +385,62 @@ export default grammar({
         ),
       ))
     ),
+
+    // ---- Pair tags --------------------------------------------------------
+    //
+    //   [ name, v; k=v #]  inline body  [# name ]
+    //
+    //   [ name #]          block form: opener ends its line, then a body
+    //   body...
+    //   [# name ]
+    //
+    // The scanner keeps a stack of open pair names and only emits
+    // _pair_close_start when the closer matches the innermost opener (same
+    // name, bracket and tag token), so the grammar can stay loose here.
+    // Opener closers reuse the exact simple_multi_tag closing tokens
+    // (` #]`, bare `#]` after a _tag_nl), and the closer reuses the
+    // simple_multi_tag start tokens (`[# `), so no new lexical conflicts.
+
+    pair_tag: $ => seq(
+      field('open', $.pair_open),
+      repeat(choice($._inline_item, $._tag_nl)),
+      field('close', $.pair_close),
+    ),
+
+    block_pair_tag: $ => seq(
+      field('open', alias($._pair_block_open, $.pair_open)),
+      $._nl,
+      optional(field('body', $.body)),
+      field('close', $.pair_close),
+      $._eol,
+    ),
+
+    pair_open: $ => seq($._pair_open_start, $._pair_open_head),
+    _pair_block_open: $ => seq($._pair_block_start, $._pair_open_head),
+
+    // Bracket-agnostic on purpose: one regex token for the open bracket and
+    // one for `<ws><token><close>`. Spelling out the 76 bracket x token
+    // combinations (as simple_multi_tag does) overflows tree-sitter's 65535
+    // parse-action limit. The scanner already verified that the closer
+    // matches the opening bracket before emitting _pair_open_start /
+    // _pair_block_start, so the grammar does not need to repeat it.
+    _pair_open_head: $ => seq(
+      field('tag_closure', alias(
+        token(prec('special', seq(reTagOpenBracket, reWs))), $.tag_start)),
+      $._tag_head,
+      tag_close($, ws_end(reTagToken, reTagCloseBracket),
+                bare_end(reTagToken, reTagCloseBracket)),
+    ),
+
+    pair_close: $ => seq(
+      $._pair_close_start,
+      field('tag_closure', alias(
+        token(prec('special', seq(reTagOpenBracket, reTagToken, reWs))), $.tag_start)),
+      field('name', alias(nim(reTagName), $.tag_name)),
+      field('tag_closure', alias(ws_end(reTagCloseBracket), $.tag_end)),
+    ),
+
+    stray_close: $ => $._pair_stray_close,
 
     standalone_simple_tag: $ => seq(
       $._standalone_tag_start,
@@ -447,11 +520,16 @@ export default grammar({
       alias($.simple_line_tag, $.simple_tag),
     )),
 
-    _tagged_expr_multi_line: $ => repeat1(choice(
+    _tagged_expr_multi_line: $ => repeat1($._inline_item),
+
+    // Anything that can appear in running (paragraph/title) text.
+    _inline_item: $ => choice(
       $.expr,
       $.line_tag,
       alias($.simple_multi_tag, $.simple_tag),
-    )),
+      $.pair_tag,
+      $.stray_close,
+    ),
 
     _multiline_tagged_text: $ => repeat1(
       seq($._tagged_expr_multi_line, $._eol)
@@ -502,6 +580,7 @@ function line_tag_body(skip, $) {
   return repeat1(choice(
     tag_word(skip), $.line_tag,
     alias($.simple_multi_tag, $.simple_tag),
+    $.pair_tag, $.stray_close,
   ));
 }
 

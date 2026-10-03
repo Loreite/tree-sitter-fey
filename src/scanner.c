@@ -1,7 +1,11 @@
 // scanner.c
+#include "html_names.h"
 #include "tree_sitter/parser.h"
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <strings.h>
 #include <wctype.h>
 
@@ -44,6 +48,7 @@
       buffer[i++] = (char)(v);                                                 \
   } while (0)
 
+// Must match `externals` in grammar.js exactly, in the same order.
 enum TokenType {
   STANDALONE_TAG_START,
   BLOCK_TAG_START,
@@ -57,6 +62,10 @@ enum TokenType {
   SECTION_END,
   ENDOFFILE,
   TAG_NL,
+  PAIR_OPEN_START,
+  PAIR_BLOCK_START,
+  PAIR_CLOSE_START,
+  PAIR_STRAY_CLOSE,
 };
 
 typedef enum {
@@ -69,6 +78,47 @@ typedef struct {
   uint32_t cap;
   int16_t *data;
 } stack;
+
+// ---------------------------------------------------------------------------
+// Pair-tag name stack
+//
+// Each open pair tag `[ name #]` is one entry. Names are stored like
+// tree-sitter-html does it: known HTML element names as an index into the
+// compiled-in HTML_NAMES table, everything else as a 24-bit hash.
+//
+// flag byte
+//   bit 0      0 = symbol table, 1 = 24-bit hash
+//   bits 1-2   bracket type   (0 '[', 1 '{', 2 '(', 3 '<')
+//   bits 3-7   tag-token index into PAIR_TOKENS (0..18)
+// payload
+//   table: 1 byte  (index into HTML_NAMES)
+//   hash:  3 bytes (big-endian 24-bit FNV-1a fold)
+//
+// PAIR_FORGOTTEN marks an entry whose details did not fit in the serialized
+// state (see serialize()); it matches any closer. A real flag is at most
+// (18 << 3) | (3 << 1) | 1 = 0x97, so 0xFF can never collide.
+// ---------------------------------------------------------------------------
+
+#define PAIR_FLAG_HASH 0x01
+#define PAIR_FORGOTTEN 0xFF
+#define PAIR_MAX_DEPTH 255
+#define PAIR_NAME_BUF 32       // first 32 folded chars kept for table lookup
+#define PAIR_LOOKAHEAD_CAP 512 // max chars scanned while classifying an opener
+
+// Same order as `tagTokens` in grammar.js.
+static const char PAIR_TOKENS[] = "@#$&%!?\\/-+*=~^.,:;";
+
+typedef struct {
+  uint8_t flag;
+  uint8_t table_idx;
+  uint32_t hash24;
+} PairEntry;
+
+typedef struct {
+  uint32_t len;
+  uint32_t cap;
+  PairEntry *data;
+} pair_stack;
 
 typedef struct {
   stack *indent_length_stack;
@@ -83,6 +133,8 @@ typedef struct {
   stack *fence_width_stack;
   stack *fence_char_stack;
 
+  pair_stack *pair_stack;
+
   bool is_at_section_start;
   int16_t base_indent;
 } Scanner;
@@ -90,13 +142,143 @@ typedef struct {
 static inline void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
 static inline void skip(TSLexer *lexer) { lexer->advance(lexer, true); }
 
+// ---- pair helpers ----------------------------------------------------------
+
+static int bracket_index(int32_t c) {
+  switch (c) {
+  case '[':
+  case ']':
+    return 0;
+  case '{':
+  case '}':
+    return 1;
+  case '(':
+  case ')':
+    return 2;
+  case '<':
+  case '>':
+    return 3;
+  default:
+    return -1;
+  }
+}
+
+static int token_index(int32_t c) {
+  if (c <= 0 || c > 127)
+    return -1;
+  const char *p = strchr(PAIR_TOKENS, (int)c);
+  return p ? (int)(p - PAIR_TOKENS) : -1;
+}
+
+static bool is_name_start(int32_t c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+}
+
+static bool is_name_char(int32_t c) {
+  return is_name_start(c) || (c >= '0' && c <= '9') || c == '-';
+}
+
+static inline uint8_t ascii_fold(int32_t c) {
+  return (uint8_t)((c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c);
+}
+
+// Name accumulator: streams the FNV-1a hash over the whole folded name and
+// keeps the first PAIR_NAME_BUF - 1 folded chars for the table lookup.
+typedef struct {
+  char buf[PAIR_NAME_BUF];
+  size_t len;
+  uint32_t fnv;
+} NameAcc;
+
+static void name_init(NameAcc *n) {
+  n->len = 0;
+  n->buf[0] = '\0';
+  n->fnv = 2166136261u;
+}
+
+static void name_push(NameAcc *n, int32_t c) {
+  uint8_t f = ascii_fold(c);
+  if (n->len < PAIR_NAME_BUF - 1)
+    n->buf[n->len] = (char)f;
+  n->len++;
+  n->fnv ^= f;
+  n->fnv *= 16777619u;
+}
+
+static int html_name_lookup(const char *name) {
+  int lo = 0, hi = HTML_NAMES_COUNT - 1;
+  while (lo <= hi) {
+    int mid = (lo + hi) / 2;
+    int cmp = strcmp(name, HTML_NAMES[mid]);
+    if (cmp == 0)
+      return mid;
+    if (cmp < 0)
+      hi = mid - 1;
+    else
+      lo = mid + 1;
+  }
+  return -1;
+}
+
+// Table first, so a known name is never stored as a hash: a table entry and
+// a hash entry can never compare equal.
+static void classify(const NameAcc *n, bool *is_hash, uint8_t *idx,
+                     uint32_t *h24) {
+  if (n->len < PAIR_NAME_BUF) {
+    char tmp[PAIR_NAME_BUF];
+    memcpy(tmp, n->buf, n->len);
+    tmp[n->len] = '\0';
+    int found = html_name_lookup(tmp);
+    if (found >= 0) {
+      *is_hash = false;
+      *idx = (uint8_t)found;
+      *h24 = 0;
+      return;
+    }
+  }
+  *is_hash = true;
+  *idx = 0;
+  *h24 = ((n->fnv >> 24) ^ n->fnv) & 0xFFFFFF;
+}
+
+static PairEntry make_entry(const NameAcc *n, int bracket, int token) {
+  bool is_hash;
+  uint8_t idx;
+  uint32_t h24;
+  classify(n, &is_hash, &idx, &h24);
+  PairEntry e;
+  e.flag = (uint8_t)(((token & 0x1F) << 3) | ((bracket & 0x3) << 1) |
+                     (is_hash ? PAIR_FLAG_HASH : 0));
+  e.table_idx = idx;
+  e.hash24 = h24;
+  return e;
+}
+
+static bool entry_matches(PairEntry top, PairEntry closer) {
+  if (top.flag == PAIR_FORGOTTEN)
+    return true;
+  if (top.flag != closer.flag)
+    return false;
+  return (top.flag & PAIR_FLAG_HASH) ? top.hash24 == closer.hash24
+                                     : top.table_idx == closer.table_idx;
+}
+
+// ---------------------------------------------------------------------------
 // Serialized layout (must match deserialize exactly):
 //   [base_indent hi][base_indent lo]
 //   [fence_len (0|1)] [fence indent][fence width][fence char]   (if fence_len)
 //   [tag_count]    [tag indents ...]        (all entries; no sentinel)
+//   [pair_depth hi][pair_depth lo][pair_stored]
+//                  [entries ...]            (innermost `pair_stored` entries,
+//                                            oldest -> newest; each entry is
+//                                            flag + 1 byte (table) or
+//                                            flag + 3 bytes (hash))
 //   [indent_count] [indents ...][bullets ...]  (entries after the sentinel)
 //   [sections ...]                          (entries after the sentinel; rest)
-unsigned serialize(Scanner *scanner, char *buffer) {
+//
+// Entries below the stored slice are restored as PAIR_FORGOTTEN.
+// ---------------------------------------------------------------------------
+static unsigned serialize(Scanner *scanner, char *buffer) {
   size_t i = 0;
 
   PUT((scanner->base_indent >> 8) & 0xFF);
@@ -128,6 +310,40 @@ unsigned serialize(Scanner *scanner, char *buffer) {
                               : 0;
   if (indent_count > 128)
     indent_count = 128;
+  uint32_t section_count =
+      scanner->section_stack->len ? scanner->section_stack->len - 1 : 0;
+
+  // ---- pair block: keep as many innermost entries as fit -------------------
+  pair_stack *ps = scanner->pair_stack;
+  size_t tail = 1 + 2 * (size_t)indent_count + section_count;
+  long budget = (long)SER_MAX - (long)i - (long)tail - 3;
+  uint32_t stored = 0;
+  long used = 0;
+  while (stored < ps->len && stored < 255) {
+    PairEntry e = ps->data[ps->len - 1 - stored];
+    long need = (e.flag == PAIR_FORGOTTEN)  ? 1
+                : (e.flag & PAIR_FLAG_HASH) ? 4
+                                            : 2;
+    if (e.flag == PAIR_FORGOTTEN || used + need > budget)
+      break; // a forgotten entry stays forgotten, and so does all below it
+    used += need;
+    stored++;
+  }
+  PUT((ps->len >> 8) & 0xFF);
+  PUT(ps->len & 0xFF);
+  PUT(stored);
+  for (uint32_t j = ps->len - stored; j < ps->len; ++j) {
+    PairEntry e = ps->data[j];
+    PUT(e.flag);
+    if (e.flag & PAIR_FLAG_HASH) {
+      PUT((e.hash24 >> 16) & 0xFF);
+      PUT((e.hash24 >> 8) & 0xFF);
+      PUT(e.hash24 & 0xFF);
+    } else {
+      PUT(e.table_idx);
+    }
+  }
+
   PUT(indent_count);
   for (uint32_t j = 1; j <= indent_count; ++j) {
     int16_t v = scanner->indent_length_stack->data[j];
@@ -145,7 +361,7 @@ unsigned serialize(Scanner *scanner, char *buffer) {
 }
 
 #define GET() ((i < length) ? (uint8_t)buffer[i++] : (i++, 0))
-void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
+static void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
   VEC_CLEAR(scanner->section_stack);
   VEC_PUSH(scanner->section_stack, 0);
   VEC_CLEAR(scanner->indent_length_stack);
@@ -157,6 +373,7 @@ void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
   VEC_CLEAR(scanner->fence_width_stack);
   VEC_CLEAR(scanner->fence_char_stack);
   VEC_CLEAR(scanner->tag_indent_length_stack);
+  VEC_CLEAR(scanner->pair_stack);
 
   scanner->base_indent = -1;
 
@@ -179,6 +396,30 @@ void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
   uint8_t tag_count = GET();
   for (uint8_t j = 0; j < tag_count && i <= length; j++) {
     VEC_PUSH(scanner->tag_indent_length_stack, GET());
+  }
+
+  uint8_t depth_hi = GET();
+  uint8_t depth_lo = GET();
+  uint32_t pair_depth = ((uint32_t)depth_hi << 8) | depth_lo;
+  uint32_t pair_stored = GET();
+  if (pair_stored > pair_depth)
+    pair_stored = pair_depth; // corrupt input: never underflow
+  PairEntry forgotten = {PAIR_FORGOTTEN, 0, 0};
+  for (uint32_t j = 0; j < pair_depth - pair_stored; j++) {
+    VEC_PUSH(scanner->pair_stack, forgotten);
+  }
+  for (uint32_t j = 0; j < pair_stored; j++) {
+    PairEntry e = {0, 0, 0};
+    e.flag = GET();
+    if (e.flag & PAIR_FLAG_HASH) {
+      uint8_t b0 = GET();
+      uint8_t b1 = GET();
+      uint8_t b2 = GET();
+      e.hash24 = ((uint32_t)b0 << 16) | ((uint32_t)b1 << 8) | b2;
+    } else {
+      e.table_idx = GET();
+    }
+    VEC_PUSH(scanner->pair_stack, e);
   }
 
   uint8_t indent_count = GET();
@@ -263,19 +504,7 @@ static bool check_delimiter(TSLexer *lexer) {
 }
 
 static bool check_tag_token(TSLexer *lexer) {
-  return ( //
-      lexer->lookahead == '.' || lexer->lookahead == ',' ||
-      lexer->lookahead == ':' || lexer->lookahead == ';' ||
-      lexer->lookahead == '!' || lexer->lookahead == '?' ||
-      lexer->lookahead == '/' || lexer->lookahead == '\\' ||
-      lexer->lookahead == '-' || lexer->lookahead == '+' ||
-      lexer->lookahead == '*' || lexer->lookahead == '^' ||
-      lexer->lookahead == '%' || lexer->lookahead == '=' ||
-      lexer->lookahead == '~' || lexer->lookahead == '@' ||
-      lexer->lookahead == '&' || lexer->lookahead == '#' ||
-      lexer->lookahead == '$'
-      //
-  );
+  return token_index(lexer->lookahead) >= 0;
 }
 
 static bool check_closure(TSLexer *lexer, bool open, bool close) {
@@ -295,25 +524,14 @@ static bool check_nl(TSLexer *lexer) {
 }
 
 static bool check_eol(TSLexer *lexer) {
-  return (lexer->lookahead == '\0' || check_nl(lexer));
-}
-
-static bool check_segment(TSLexer *lexer) {
-  while (check_token(lexer)) {
-    skip(lexer);
-  }
-  return (check_delimiter(lexer) || check_closure(lexer, true, true));
+  return (lexer->lookahead == '\0' || check_nl(lexer) || lexer->eof(lexer));
 }
 
 static bool istabspace(TSLexer *lexer) {
   return (lexer->lookahead == ' ' || lexer->lookahead == '\t');
 }
 
-static bool indent_is_two_space_or_tab(int16_t indent_length) {
-  return (indent_length == 2 || indent_length == 9 || indent_length == 16);
-}
-
-Bullet getbullet(TSLexer *lexer, bool bullet) {
+static Bullet getbullet(TSLexer *lexer, bool bullet) {
   bool matched = false;
   if (check_delimiter(lexer) || check_closure(lexer, true, true)) {
     advance(lexer);
@@ -344,16 +562,311 @@ Bullet getbullet(TSLexer *lexer, bool bullet) {
   return NOTABULLET;
 }
 
-bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
+// ---------------------------------------------------------------------------
+// Line-start tags. Everything that begins with an open bracket is classified
+// here in a single forward pass, because once the lexer has advanced it
+// cannot back up:
+//
+//   [ name ...]#      block tag      open, ws, head, ws, close, token
+//   [ name ... #]     pair opener    open, ws, head, ws, token, close
+//   [# name ]         pair closer    open, token, ws, name, ws, close
+//   [# name ... #]    standalone     open, token, ws, ..., ws, token, close,
+//   EOL
+//
+// All emitted tokens are zero-width (mark_end was called before the leading
+// whitespace) except _pair_stray_close, which covers the whole `[# name ]`.
+// Lookahead uses advance() only: skip() would move the token start.
+// ---------------------------------------------------------------------------
+
+typedef enum {
+  SHAPE_NONE,
+  SHAPE_BLOCK_TAG,
+  SHAPE_PAIR_INLINE,
+  SHAPE_PAIR_BLOCK,
+} OpenShape;
+
+// Advance over a newline (\n, \r\n or \r) and the following indentation.
+// Returns false if the next line is blank or the input ends, which ends a
+// multi-line tag head (the grammar's _tag_nl does not cross blank lines
+// inside a head either, in practice).
+static bool lookahead_newline(TSLexer *lexer, int *budget) {
+  if (lexer->lookahead == '\r') {
+    advance(lexer);
+    (*budget)--;
+  }
+  if (lexer->lookahead == '\n') {
+    advance(lexer);
+    (*budget)--;
+  }
+  while (istabspace(lexer)) {
+    advance(lexer);
+    (*budget)--;
+  }
+  return !(check_nl(lexer) || lexer->eof(lexer) || lexer->lookahead == '\0');
+}
+
+// Called with the lexer just past `<open><ws>`. Reads the head of a
+// `[ name ...` tag and reports whether it is a block tag or a pair opener.
+// On a pair opener, `name` holds the name and `*token` the closing tag token.
+static OpenShape scan_open_shape(TSLexer *lexer, int32_t open, NameAcc *name,
+                                 int *token) {
+  int budget = PAIR_LOOKAHEAD_CAP;
+
+  // whitespace (and _tag_nl line breaks) before the name
+  while (true) {
+    if (istabspace(lexer)) {
+      advance(lexer);
+      budget--;
+    } else if (check_nl(lexer)) {
+      if (!lookahead_newline(lexer, &budget))
+        return SHAPE_NONE;
+    } else {
+      break;
+    }
+  }
+
+  if (!is_name_start(lexer->lookahead))
+    return SHAPE_NONE;
+  name_init(name);
+  while (is_name_char(lexer->lookahead) && budget > 0) {
+    name_push(name, lexer->lookahead);
+    advance(lexer);
+    budget--;
+  }
+
+  // After the name only a `,`/`;` value list or the closer may follow.
+  bool prev_ws = false;
+  bool in_values = false;
+  while (budget-- > 0) {
+    int32_t c = lexer->lookahead;
+    if (c == '\0' || lexer->eof(lexer))
+      return SHAPE_NONE;
+
+    if (c == '\n' || c == '\r') {
+      if (!lookahead_newline(lexer, &budget))
+        return SHAPE_NONE;
+      prev_ws = true;
+      continue;
+    }
+    if (c == ' ' || c == '\t') {
+      prev_ws = true;
+      advance(lexer);
+      continue;
+    }
+
+    if (prev_ws && bracket_index(c) >= 0 && check_closure(lexer, false, true)) {
+      // ` ]` ends every tag head (a value may not start with a close
+      // bracket). Followed by a tag token it is a block tag.
+      if (!compare_closure(open, c))
+        return SHAPE_NONE;
+      advance(lexer);
+      return check_tag_token(lexer) ? SHAPE_BLOCK_TAG : SHAPE_NONE;
+    }
+
+    if (prev_ws && token_index(c) >= 0) {
+      advance(lexer);
+      if (check_closure(lexer, false, true)) {
+        // ` #]` ends the head of a pair opener
+        if (!compare_closure(open, lexer->lookahead))
+          return SHAPE_NONE;
+        *token = token_index(c);
+        advance(lexer);
+        while (istabspace(lexer))
+          advance(lexer);
+        return check_eol(lexer) ? SHAPE_PAIR_BLOCK : SHAPE_PAIR_INLINE;
+      }
+      // a value word that starts with a tag token
+      if (!in_values)
+        return SHAPE_NONE;
+      prev_ws = false;
+      continue;
+    }
+
+    if (!in_values) {
+      if (c != ',' && c != ';')
+        return SHAPE_NONE; // `[ foo bar ]` etc.: plain text
+      in_values = true;
+    }
+    prev_ws = false;
+    advance(lexer);
+  }
+  return SHAPE_NONE;
+}
+
+static bool scan_pair_open(Scanner *scanner, TSLexer *lexer,
+                           const bool *valid_symbols, OpenShape shape,
+                           const NameAcc *name, int bracket, int token) {
+  TSSymbol sym;
+  if (shape == SHAPE_PAIR_BLOCK && valid_symbols[PAIR_BLOCK_START])
+    sym = PAIR_BLOCK_START;
+  else if (valid_symbols[PAIR_OPEN_START])
+    sym = PAIR_OPEN_START;
+  else
+    return false;
+
+  if (scanner->pair_stack->len >= PAIR_MAX_DEPTH)
+    return false; // D5: refuse rather than overflow the serialized depth
+
+  PairEntry e = make_entry(name, bracket, token);
+  VEC_PUSH(scanner->pair_stack, e);
+  lexer->result_symbol = sym;
+  return true;
+}
+
+// Called with the lexer just past `<open><token><ws>`.
+static bool scan_token_tag(Scanner *scanner, TSLexer *lexer,
+                           const bool *valid_symbols, int32_t open,
+                           int32_t tag_token) {
+  bool want_close =
+      valid_symbols[PAIR_CLOSE_START] || valid_symbols[PAIR_STRAY_CLOSE];
+  bool prev_space = true;
+
+  while (istabspace(lexer))
+    advance(lexer);
+
+  // `[# name ]`: a pair closer
+  if (is_name_start(lexer->lookahead)) {
+    NameAcc name;
+    name_init(&name);
+    while (is_name_char(lexer->lookahead)) {
+      name_push(&name, lexer->lookahead);
+      advance(lexer);
+    }
+    prev_space = istabspace(lexer);
+    while (istabspace(lexer))
+      advance(lexer);
+
+    if (prev_space && want_close && compare_closure(open, lexer->lookahead)) {
+      advance(lexer);
+      PairEntry closer =
+          make_entry(&name, bracket_index(open), token_index(tag_token));
+      pair_stack *ps = scanner->pair_stack;
+      if (valid_symbols[PAIR_CLOSE_START] && ps->len > 0 &&
+          entry_matches(VEC_BACK(ps), closer)) {
+        VEC_POP(ps);
+        lexer->result_symbol = PAIR_CLOSE_START; // zero-width
+        return true;
+      }
+      if (valid_symbols[PAIR_STRAY_CLOSE]) {
+        lexer->mark_end(lexer); // covers the whole `[# name ]`
+        lexer->result_symbol = PAIR_STRAY_CLOSE;
+        return true;
+      }
+      return false;
+    }
+  }
+
+  if (!valid_symbols[STANDALONE_TAG_START])
+    return false;
+
+  // `[# name ... #]` + EOL: find "<ws><sigil><close>" followed by end of line
+  int budget = PAIR_LOOKAHEAD_CAP * 4;
+  while (budget-- > 0) {
+    int32_t c = lexer->lookahead;
+    if (c == '\0' || lexer->eof(lexer))
+      return false;
+
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+      prev_space = true;
+      advance(lexer);
+      continue;
+    }
+
+    if (prev_space && c == tag_token) {
+      advance(lexer);
+      if (compare_closure(open, lexer->lookahead)) {
+        advance(lexer);
+        if (!check_eol(lexer))
+          return false;
+        lexer->result_symbol = STANDALONE_TAG_START;
+        return true;
+      }
+      prev_space = false;
+      continue;
+    }
+
+    prev_space = false;
+    advance(lexer);
+  }
+  return false;
+}
+
+static bool scan_bracket(Scanner *scanner, TSLexer *lexer,
+                         const bool *valid_symbols, int16_t indent_length) {
+  // Zero-width tokens sit right at the bracket, not before the whitespace
+  // that precedes it (so `pair_open` etc. start at their bracket).
+  lexer->mark_end(lexer);
+  int32_t open = lexer->lookahead;
+  advance(lexer);
+
+  if (istabspace(lexer)) {
+    if (!(valid_symbols[BLOCK_TAG_START] || valid_symbols[PAIR_OPEN_START] ||
+          valid_symbols[PAIR_BLOCK_START]))
+      return false;
+    advance(lexer);
+    NameAcc name;
+    int token = -1;
+    OpenShape shape = scan_open_shape(lexer, open, &name, &token);
+    switch (shape) {
+    case SHAPE_BLOCK_TAG:
+      if (valid_symbols[BLOCK_TAG_START])
+        return indent_block_tag(scanner, lexer, indent_length);
+      return false;
+    case SHAPE_PAIR_INLINE:
+    case SHAPE_PAIR_BLOCK:
+      return scan_pair_open(scanner, lexer, valid_symbols, shape, &name,
+                            bracket_index(open), token);
+    default:
+      return false;
+    }
+  }
+
+  if (check_tag_token(lexer)) {
+    if (!(valid_symbols[STANDALONE_TAG_START] ||
+          valid_symbols[PAIR_CLOSE_START] || valid_symbols[PAIR_STRAY_CLOSE]))
+      return false;
+    int32_t tag_token = lexer->lookahead;
+    advance(lexer);
+    // the opener must be followed by a space or tab
+    if (!istabspace(lexer))
+      return false;
+    return scan_token_tag(scanner, lexer, valid_symbols, open, tag_token);
+  }
+
+  return false;
+}
+
+// At the start of a line, a list item / block tag that is about to end must
+// get its LIST_END / LISTITEM_END / BLOCK_TAG_END before any bracket tag on
+// that line is considered; otherwise a dedented `[ x ]#` or `[ b #]` would be
+// swallowed into the container.
+static bool container_end_pending(Scanner *scanner, TSLexer *lexer,
+                                  const bool *valid_symbols,
+                                  int16_t indent_length, uint32_t skipped) {
+  bool list_end = (valid_symbols[LIST_END] || valid_symbols[LISTITEM_END]) &&
+                  scanner->indent_length_stack->len > 1 &&
+                  indent_length <= VEC_BACK(scanner->indent_length_stack);
+  bool tag_end = valid_symbols[BLOCK_TAG_END] &&
+                 scanner->tag_indent_length_stack->len > 0 &&
+                 indent_length <= VEC_BACK(scanner->tag_indent_length_stack);
+  if (!list_end && !tag_end)
+    return false;
+  return lexer->get_column(lexer) == skipped; // only at the start of a line
+}
+
+static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   if (in_error_recovery(valid_symbols))
     return false;
 
   scanner->is_at_section_start = false;
+  uint32_t skipped = 0;
 
   // Handle explicit tag newlines with active list-indent checks
   if (valid_symbols[TAG_NL]) {
-    while (istabspace(lexer))
-      advance(lexer);
+    while (istabspace(lexer)) {
+      skip(lexer); // not part of the token (and not of any zero-width one)
+      skipped++;
+    }
     if (lexer->lookahead == '\r') {
       advance(lexer);
     }
@@ -394,7 +907,7 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     }
   }
 
-  // - Section endshttps://github.com/Loreite/tree-sitter-fey
+  // - Section ends
   int16_t indent_length = 0;
   lexer->mark_end(lexer);
   while (true) {
@@ -411,6 +924,7 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
         lexer->result_symbol = BLOCK_TAG_END;
         //
       } else if (valid_symbols[SECTION_END]) {
+        VEC_CLEAR(scanner->pair_stack); // a pair cannot span headings
         lexer->result_symbol = SECTION_END;
         //
       } else if (valid_symbols[ENDOFFILE]) {
@@ -424,65 +938,18 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       break;
     }
     skip(lexer);
+    skipped++;
   }
 
-  // - Tags that start a line. All of these are zero-width tokens (mark_end was
-  //   called above), so the lookahead below is free.
-  //
-  //     [ name ...]#      block tag:  open bracket, then space/tab
-  //     [# name #]        standalone: open bracket, sigil, space/tab, ...,
-  //                                   space/tab, sigil, close bracket, EOL
+  // - Tags that start with an open bracket (see scan_bracket)
   int16_t newlines = 0;
-  if ((valid_symbols[STANDALONE_TAG_START] || valid_symbols[BLOCK_TAG_START]) &&
-      check_closure(lexer, true, false)) {
-    int32_t open_bracket = lexer->lookahead;
-    skip(lexer);
-
-    if (istabspace(lexer)) {
-      if (valid_symbols[BLOCK_TAG_START])
-        return indent_block_tag(scanner, lexer, indent_length);
-      return false;
-    }
-
-    if (valid_symbols[STANDALONE_TAG_START] && check_tag_token(lexer)) {
-      int32_t tag_token = lexer->lookahead;
-      skip(lexer);
-
-      // the opener must be followed by a space or tab
-      if (!istabspace(lexer))
-        return false;
-
-      // find "<ws><sigil><close>" followed by end of line
-      bool prev_space = true;
-      while (true) {
-        int32_t c = lexer->lookahead;
-        if (c == '\0')
-          return false;
-
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-          prev_space = true;
-          skip(lexer);
-          continue;
-        }
-
-        if (prev_space && c == tag_token) {
-          skip(lexer);
-          if (compare_closure(open_bracket, lexer->lookahead)) {
-            skip(lexer);
-            if (!check_eol(lexer))
-              return false;
-            lexer->result_symbol = STANDALONE_TAG_START;
-            return true;
-          }
-          prev_space = false;
-          continue;
-        }
-
-        prev_space = false;
-        skip(lexer);
-      }
-    }
-    return false;
+  if ((valid_symbols[STANDALONE_TAG_START] || valid_symbols[BLOCK_TAG_START] ||
+       valid_symbols[PAIR_OPEN_START] || valid_symbols[PAIR_BLOCK_START] ||
+       valid_symbols[PAIR_CLOSE_START] || valid_symbols[PAIR_STRAY_CLOSE]) &&
+      check_closure(lexer, true, false) &&
+      !container_end_pending(scanner, lexer, valid_symbols, indent_length,
+                             skipped)) {
+    return scan_bracket(scanner, lexer, valid_symbols, indent_length);
   }
 
   if (valid_symbols[LIST_END] || valid_symbols[LISTITEM_END] ||
@@ -529,7 +996,7 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     if (indent_length < VEC_BACK(scanner->indent_length_stack)) {
       return dedent(scanner, lexer);
     } else if (indent_length == VEC_BACK(scanner->indent_length_stack)) {
-      if (getbullet(lexer, false) == VEC_BACK(scanner->bullet_stack)) {
+      if ((int16_t)getbullet(lexer, false) == VEC_BACK(scanner->bullet_stack)) {
         lexer->result_symbol = LISTITEM_END;
         return true;
       }
@@ -644,26 +1111,35 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   }
 
   if (is_signature) {
-    if (scanner->base_indent == -1) {
-      scanner->base_indent = indent_length >= 2 ? indent_length - 2 : 0;
+    // NOTE: base_indent is only committed on the returns below (scanner
+    // state must change only when a token is emitted).
+    int16_t base_indent = scanner->base_indent;
+    if (base_indent == -1) {
+      base_indent = indent_length >= 2 ? indent_length - 2 : 0;
     }
 
-    if (indent_length == scanner->base_indent + 2) {
+    if (indent_length == base_indent + 2) {
       if (scanner->is_at_section_start && valid_symbols[LIST_END]) {
+        scanner->base_indent = base_indent;
         return dedent(scanner, lexer);
       } else if (scanner->is_at_section_start && valid_symbols[BLOCK_TAG_END]) {
+        scanner->base_indent = base_indent;
         return dedent_block_tag(scanner, lexer);
       }
 
       if (valid_symbols[SECTION_END]                      //
           && segments <= VEC_BACK(scanner->section_stack) //
       ) {
+        scanner->base_indent = base_indent;
         VEC_POP(scanner->section_stack);
+        VEC_CLEAR(scanner->pair_stack); // a pair cannot span headings
         lexer->result_symbol = SECTION_END;
         return true;
 
       } else if (valid_symbols[SIGNATURE]) {
+        scanner->base_indent = base_indent;
         VEC_PUSH(scanner->section_stack, segments);
+        VEC_CLEAR(scanner->pair_stack); // a pair cannot span headings
         lexer->result_symbol = SIGNATURE;
         return true;
       }
@@ -686,6 +1162,8 @@ void *tree_sitter_fey_external_scanner_create() {
   scanner->fence_indent_stack = (stack *)calloc(1, sizeof(stack));
   scanner->fence_width_stack = (stack *)calloc(1, sizeof(stack));
   scanner->fence_char_stack = (stack *)calloc(1, sizeof(stack));
+
+  scanner->pair_stack = (pair_stack *)calloc(1, sizeof(pair_stack));
 
   deserialize(scanner, NULL, 0);
   return scanner;
@@ -726,6 +1204,8 @@ void tree_sitter_fey_external_scanner_destroy(void *payload) {
   VEC_FREE(scanner->fence_width_stack);
   VEC_FREE(scanner->fence_char_stack);
 
+  VEC_FREE(scanner->pair_stack);
+
   free(scanner->fence_indent_stack);
   free(scanner->fence_width_stack);
   free(scanner->fence_char_stack);
@@ -733,6 +1213,8 @@ void tree_sitter_fey_external_scanner_destroy(void *payload) {
   // free(scanner->tag_bracket_stack);
   // free(scanner->tag_token_stack);
   free(scanner->tag_indent_length_stack);
+
+  free(scanner->pair_stack);
 
   free(scanner->indent_length_stack);
   free(scanner->bullet_stack);
