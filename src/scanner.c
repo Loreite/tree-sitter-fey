@@ -45,6 +45,7 @@
   } while (0)
 
 enum TokenType {
+  STANDALONE_TAG_START,
   BLOCK_TAG_START,
   BLOCK_TAG_END,
   LIST_START,
@@ -284,6 +285,11 @@ static bool check_closure(TSLexer *lexer, bool open, bool close) {
                     lexer->lookahead == '}' || lexer->lookahead == '>'));
 }
 
+static bool compare_closure(int32_t open, int32_t close) {
+  return (open == '[' && close == ']') || (open == '(' && close == ')') ||
+         (open == '{' && close == '}') || (open == '<' && close == '>');
+}
+
 static bool check_segment(TSLexer *lexer) {
   while (check_token(lexer)) {
     skip(lexer);
@@ -380,7 +386,7 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     }
   }
 
-  // - Section ends
+  // - Section endshttps://github.com/Loreite/tree-sitter-fey
   int16_t indent_length = 0;
   lexer->mark_end(lexer);
   while (true) {
@@ -411,6 +417,25 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     }
     skip(lexer);
   }
+
+  // if (valid_symbols[STANDALONE_TAG_START]) {
+  //   if (check_closure(lexer, true, false)) {
+  //     int32_t open_bracket = lexer->lookahead;
+  //     skip(lexer);
+  //     if (check_tag_token(lexer)) {
+  //         int32_t tag_token = lexer->lookahead;
+  //         bool last_was_escape = false;
+  //         bool is_in_string = false;
+  //         int32_t string_char = 0;
+  //         while (true) {
+  //             skip(lexer);
+  //
+  //             if ()
+  //         }
+  //     }
+  //     return false;
+  //   }
+  // }
 
   // - Listitem ends
   int16_t newlines = 0;

@@ -44,8 +44,6 @@ const reTagOpen = /[\[{(<][.,:;!?\\/\-_+*=~^%@&#$]/;
 const reTagClose = /[.,:;!?\\/\-_+*=~^%@&#$][\]})>]/;
 
 const reCellEscape = /\\[|+*~\\]/;
-const esc = c => c.replace(/[\\\]\[^-]/g, '\\$&');
-
 const reSegment = /[.,:;!?\\/'"`\-+*=~^%@&#$\[\](){}<>]/;
 const reFence = /[.,:;!?\\/'"`\-+*=~^%@&#$]+/;
 
@@ -55,6 +53,7 @@ export default grammar({
   extras: _ => [/[ \f\t\v\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]/],
 
   externals: $ => [
+    $._standalone_tag_start,
     $._block_tag_start,
     $._block_tag_end,
     $._list_start,
@@ -131,8 +130,8 @@ export default grammar({
       $.list,
       $.table,
       $.block,
-      // $.simple_multi_tag,
       $.block_tag,
+      // $.standalone_simple_tag,
     ),
 
     section: $ => seq(
@@ -166,6 +165,7 @@ export default grammar({
 
     paragraph: $ => seq(
       // optional($._directive_list),
+      // prec.left(1, $._multiline_tagged_text),
       $._multiline_tagged_text,
     ),
 
@@ -327,6 +327,12 @@ export default grammar({
       ))
     ),
 
+    standalone_simple_tag: $ => seq(
+      $._standalone_tag_start,
+      alias($.simple_multi_tag, $.simple_tag),
+      $._eol,
+    ),
+
     simple_multi_tag: $ => choice(
       ...tagBrackets.flatMap(([open, close]) =>
         tagTokens.map(tok => seq(
@@ -387,21 +393,16 @@ export default grammar({
       field('value', alias($._tag_value, $.value)),
     ),
 
-    _tag_value: $ => choice(
-      // alias(token(tag_word(',;' + tagQuotes.join(''))), 'bare'),
-      tag_word(',;' + tagQuotes.join('')),
-
-      ...tagQuotes.map(q => seq(
-        nim(q),
-        repeat(tag_word(q)),
-        nim(q),
-      )),
-      // ...tagQuotes.map(q => alias(token(seq(
-      //   nim(q),
-      //   repeat(tag_word(q)),
-      //   nim(q),
-      // )), 'quoted')),
-    ),
+    _tag_value: $ => repeat1(tag_word(',;')),
+    // _tag_value: $ => choice(
+    //   tag_word(',;' + tagQuotes.join('')),
+    //
+    //   ...tagQuotes.map(q => seq(
+    //     nim(q),
+    //     repeat(tag_word(q)),
+    //     nim(q),
+    //   )),
+    // ),
 
     _expr_line: $ => repeat1($.expr),
 
@@ -448,13 +449,15 @@ function tag_word(skip) {
 }
 
 function tag_expr(pr, tfunc, skip = '') {
+  const esc = c => c.replace(/[\\\]\[^-]/g, '\\$&');
   const chars = skip.split('');
   const sym = new RegExp(`[^\\p{Z}\\p{L}\\p{N}\\t\\n\\r${chars.map(esc).join('')}]`);
 
   // escapes for any quote chars in skip, plus \\ 
-  const quotes = chars.filter(c => tagQuotes.includes(c));
-  const escapes = quotes.length
-    ? [alias(tfunc(prec(pr, new RegExp(`\\\\[${quotes.join('')}\\\\]`))), 'escape')]
+  // const quotes = chars.filter(c => tagQuotes.includes(c));
+  // const escapes = quotes.length
+  const escapes = chars.length
+    ? [alias(tfunc(prec(pr, new RegExp(`\\\\[${chars.join('')}\\\\]`))), 'escape')]
     : [];
 
   return choice(
