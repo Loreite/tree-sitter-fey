@@ -55,6 +55,8 @@ export default grammar({
   extras: _ => [/[ \f\t\v\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]/],
 
   externals: $ => [
+    $._block_start
+    $._block_end,
     $._list_start,
     $._list_end,
     $._listitem_end,
@@ -73,6 +75,11 @@ export default grammar({
     // $._ts_contents,
     // $._directive_list,
     $._body_contents,
+  ],
+
+  conflicts: $ => [
+    // [ $._element ],
+    // [ $.paragraph ],
   ],
 
   precedences: _ => [
@@ -122,9 +129,10 @@ export default grammar({
     _element: $ => choice(
       // $.comment,
       $.list,
-      // $.tag,
       $.table,
-      $.block
+      $.block,
+      // $.simple_multi_tag,
+      $.block_tag,
     ),
 
     section: $ => seq(
@@ -292,6 +300,30 @@ export default grammar({
       repeat(seq($._expr_line, repeat1($._nl))),
     ),
 
+    block_tag: $ => choice(
+      ...tagBrackets.flatMap(([open, close]) =>
+        tagTokens.map(tok => seq(
+          // field('tag_closure', alias(token(seq(nim(tok), imm(open))), $.tag_start)),
+          $._block_start,
+          field('tag_closure', alias(sp_nim(open), $.tag_start)),
+
+          repeat($._tag_nl),
+          field('name', alias(nim(reTagName), $.tag_name)),
+          repeat($._tag_multi_value_choice),
+          optional(choice(nim(','), nim(';'))),
+          repeat($._tag_nl),
+
+          field('tag_closure', alias(token(seq(nim(close), imm(tok))), $.tag_end)),
+          field('head', seq(alias($._tagged_expr_multi_line, $.head), $._eol)),
+          field('body', choice(
+            $._eof,
+            alias($._body_contents, $.body),
+          )),
+          $._list_end,
+        ))
+      )
+    ),
+
     simple_multi_tag: $ => choice(
       ...tagBrackets.flatMap(([open, close]) =>
         tagTokens.map(tok => seq(
@@ -379,7 +411,9 @@ export default grammar({
     )),
 
     _tagged_expr_multi_line: $ => repeat1(choice(
-      $.expr, alias($.simple_multi_tag, $.simple_tag)
+      $.expr,
+      alias($.simple_multi_tag, $.simple_tag),
+      // $.block_tag,
     )),
 
     _multiline_tagged_text: $ => repeat1(
