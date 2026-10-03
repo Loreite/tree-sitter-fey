@@ -43,6 +43,11 @@ const reTagToken =/[.,:;!?\\/\-+*=~^%@&#$]/
 const reTagOpen = /[\[{(<][.,:;!?\\/\-_+*=~^%@&#$]/;
 const reTagClose = /[.,:;!?\\/\-_+*=~^%@&#$][\]})>]/;
 
+// Tags require a space/tab between their open/close markers and their content:
+//   [# name #]    {$ name, value $}    ( name )#    *[ name ]  body *
+const reWs = /[ \t]/;
+const reWsPlus = /[ \t]+/;
+
 const reCellEscape = /\\[|+*~\\]/;
 const reSegment = /[.,:;!?\\/'"`\-+*=~^%@&#$\[\](){}<>]/;
 const reFence = /[.,:;!?\\/'"`\-+*=~^%@&#$]+/;
@@ -77,6 +82,7 @@ export default grammar({
   ],
 
   conflicts: $ => [
+    [$._tag_head, $._tag_multi_value_choice],
     // [ $._element ],
     // [ $.paragraph ],
   ],
@@ -131,7 +137,7 @@ export default grammar({
       $.table,
       $.block,
       $.block_tag,
-      // $.standalone_simple_tag,
+      $.standalone_simple_tag,
     ),
 
     section: $ => seq(
@@ -300,12 +306,46 @@ export default grammar({
       repeat(seq($._expr_line, repeat1($._nl))),
     ),
 
+    // 76 thin alternatives (sigil x bracket). The expensive pieces (the head with
+    // name/values, and the sigil-specific body) are shared rules; only the
+    // start/close tokens vary per alternative.
+    line_tag: $ => choice(
+      ...tagTokens.flatMap((tok, ti) =>
+        tagBrackets.map(([open, close]) => seq(
+          field('tag_closure', alias(
+            token(seq(sp_nim(tok), imm(open), imm(reWs))), $.tag_start)
+          ),
+          $._tag_head,
+          tag_close($, ws_end(close), bare_end(close)),
+          $[`_line_tag_tail_${ti}`],
+        )),
+      )
+    ),
+
+    // Shared by line_tag and simple_multi_tag.
+    _tag_head: $ => seq(
+      repeat($._tag_nl),
+      field('name', alias(nim(reTagName), $.tag_name)),
+      repeat($._tag_multi_value_choice),
+      optional(alias(choice(nim(','), nim(';')), 'tag_delimiter')),
+    ),
+
+    // one per sigil: body and terminator depend only on the sigil
+    ...Object.fromEntries(tagTokens.flatMap((tok, ti) => [
+      [`_line_tag_body_${ti}`, $ => line_tag_body(tok, $)],
+      [`_line_tag_tail_${ti}`, $ => seq(
+        optional(seq(/[ \t]{2,}/, alias($[`_line_tag_body_${ti}`], $.body))),
+        choice(
+          $._eol,
+          field('tag_closure', alias(nim(tok), $.body_end)),
+        ),
+      )],
+    ])),
+
     block_tag: $ => seq(
       $._block_tag_start,
       /[ \t]*/,
       $._block_tag_open,
-      
-      // field('head', optional(alias($._tagged_expr_line, $.head))),
       choice(
         $._eol,
         seq($._nl, field('body', $.body)),
@@ -316,14 +356,16 @@ export default grammar({
 
     _block_tag_open: $ => choice(
       ...tagBrackets.map(([open, close]) => seq(
-        field('tag_closure', alias(sp_nim(open), $.tag_start)),
+        field('tag_closure', alias(token.immediate(prec('special', seq(open, reWs))), $.tag_start)),
         repeat($._tag_nl),
         field('name', alias(nim(reTagName), $.tag_name)),
         repeat($._tag_multi_value_choice),
         optional(alias(choice(nim(','), nim(';')), 'tag_delimiter')),
-        repeat($._tag_nl),
-        field('tag_closure', alias(
-          token(prec('non-immediate', seq(close, reTagToken))), $.tag_end)),
+        tag_close(
+          $,
+          ws_end(close, reTagToken),
+          bare_end(close, reTagToken),
+        ),
       ))
     ),
 
@@ -336,15 +378,9 @@ export default grammar({
     simple_multi_tag: $ => choice(
       ...tagBrackets.flatMap(([open, close]) =>
         tagTokens.map(tok => seq(
-          field('tag_closure', alias(token(seq(nim(open), imm(tok))), $.tag_start)),
-
-          repeat($._tag_nl),
-          field('name', alias(nim(reTagName), $.tag_name)),
-          repeat($._tag_multi_value_choice),
-        optional(alias(choice(nim(','), nim(';')), 'tag_delimiter')),
-          repeat($._tag_nl),
-
-          field('tag_closure', alias(token(seq(nim(tok), imm(close))), $.tag_end))
+          field('tag_closure', alias(token(seq(nim(open), imm(tok), imm(reWs))), $.tag_start)),
+          $._tag_head,
+          tag_close($, ws_end(tok, close), bare_end(tok, close)),
         ))
       )
     ),
@@ -352,15 +388,18 @@ export default grammar({
     simple_line_tag: $ => choice(
       ...tagBrackets.flatMap(([open, close]) =>
         tagTokens.map(tok => seq(
-          field('tag_closure', alias(token(seq(nim(open), imm(tok))), $.tag_start)),
-
-          field('name', alias(nim(reTagName), $.tag_name)),
-          repeat($._tag_line_value_choice),
-        optional(alias(choice(nim(','), nim(';')), 'tag_delimiter')),
-
-          field('tag_closure', alias(token(seq(nim(tok), imm(close))), $.tag_end))
+          field('tag_closure', alias(token(seq(nim(open), imm(tok), imm(reWs))), $.tag_start)),
+          $._tag_line_head,
+          field('tag_closure', alias(ws_end(tok, close), $.tag_end))
         ))
       )
+    ),
+
+    // Single-line counterpart of _tag_head, shared by every simple_line_tag.
+    _tag_line_head: $ => seq(
+      field('name', alias(nim(reTagName), $.tag_name)),
+      repeat($._tag_line_value_choice),
+      optional(alias(choice(nim(','), nim(';')), 'tag_delimiter')),
     ),
 
     _tag_multi_value_choice: $ => choice(
@@ -393,16 +432,9 @@ export default grammar({
       field('value', alias($._tag_value, $.value)),
     ),
 
-    _tag_value: $ => repeat1(tag_word(',;')),
-    // _tag_value: $ => choice(
-    //   tag_word(',;' + tagQuotes.join('')),
-    //
-    //   ...tagQuotes.map(q => seq(
-    //     nim(q),
-    //     repeat(tag_word(q)),
-    //     nim(q),
-    //   )),
-    // ),
+    // A value word may not START with a closing bracket: otherwise ` ]` ties
+    // with the bracket-only closer of line_tag and the word wins the lexer tie.
+    _tag_value: $ => repeat1(tag_word(',;', ']})>')),
 
     _expr_line: $ => repeat1($.expr),
 
@@ -411,13 +443,14 @@ export default grammar({
     )),
 
     _tagged_expr_line: $ => repeat1(choice(
-      $.expr, alias($.simple_line_tag, $.simple_tag)
+      $.expr,
+      alias($.simple_line_tag, $.simple_tag),
     )),
 
     _tagged_expr_multi_line: $ => repeat1(choice(
       $.expr,
+      $.line_tag,
       alias($.simple_multi_tag, $.simple_tag),
-      // $.block_tag,
     )),
 
     _multiline_tagged_text: $ => repeat1(
@@ -440,29 +473,62 @@ export default grammar({
   }
 });
 
+// Closing marker of a tag. Either whitespace followed by the closer on the same
+// line (` #]`), or, for multi-line tags, one or more newlines (the external
+// _tag_nl already consumes the indentation) followed by the bare closer.
+function tag_close($, spaced, bare) {
+  return choice(
+    field('tag_closure', alias(spaced, $.tag_end)),
+    seq(
+      repeat1($._tag_nl),
+      field('tag_closure', alias(bare, $.tag_end)),
+    ),
+  );
+}
 
-function tag_word(skip) {
+// Closer token for the line after a _tag_nl, which has already consumed the
+// newline and indentation. It is a separate token from ordinary value
+// symbols (like `]`) so the parser can tell "closer" from "value".
+function bare_end(...parts) {
+  return token.immediate(prec('special', parts.length === 1 ? parts[0] : seq(...parts)));
+}
+
+// Closer token that must be preceded by at least one space/tab.
+function ws_end(...parts) {
+  return token.immediate(prec('special', seq(reWsPlus, ...parts)));
+}
+
+function line_tag_body(skip, $) {
+  return repeat1(choice(
+    tag_word(skip), $.line_tag,
+    alias($.simple_multi_tag, $.simple_tag),
+  ));
+}
+
+function tag_word(skip, noStart = '') {
   return seq(
-    tag_expr('non-immediate', token, skip),
+    tag_expr('non-immediate', token, skip, noStart),
     repeat(tag_expr('immediate', token.immediate, skip)),
   );
 }
 
-function tag_expr(pr, tfunc, skip = '') {
+function tag_expr(pr, tfunc, skip = '', noStart = '') {
   const esc = c => c.replace(/[\\\]\[^-]/g, '\\$&');
   const chars = skip.split('');
-  const sym = new RegExp(`[^\\p{Z}\\p{L}\\p{N}\\t\\n\\r${chars.map(esc).join('')}]`);
+  // chars that may not be matched at all here (skip) or as a leading token (noStart)
+  const excl = (skip + noStart).split('');
+  const sym = new RegExp(`[^\\p{Z}\\p{L}\\p{N}\\t\\n\\r${excl.map(esc).join('')}]`);
 
   // escapes for any quote chars in skip, plus \\ 
   // const quotes = chars.filter(c => tagQuotes.includes(c));
   // const escapes = quotes.length
   const escapes = chars.length
-    ? [alias(tfunc(prec(pr, new RegExp(`\\\\[${chars.join('')}\\\\]`))), 'escape')]
+    ? [alias(tfunc(prec(pr, new RegExp(`\\\\[${chars.map(esc).join('')}\\\\]`))), 'escape')]
     : [];
 
   return choice(
     ...escapes,
-    ...asciiSymbols.filter(c => !chars.includes(c)).map(c => tfunc(prec(pr, c))),
+    ...asciiSymbols.filter(c => !excl.includes(c)).map(c => tfunc(prec(pr, c))),
     alias(tfunc(prec(pr, /\p{L}+/)), 'str'),
     alias(tfunc(prec(pr, /\p{N}+/)), 'num'),
     alias(tfunc(prec(pr, sym)), 'sym'),

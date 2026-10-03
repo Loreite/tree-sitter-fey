@@ -290,6 +290,14 @@ static bool compare_closure(int32_t open, int32_t close) {
          (open == '{' && close == '}') || (open == '<' && close == '>');
 }
 
+static bool check_nl(TSLexer *lexer) {
+  return (lexer->lookahead == '\r' || lexer->lookahead == '\n');
+}
+
+static bool check_eol(TSLexer *lexer) {
+  return (lexer->lookahead == '\0' || check_nl(lexer));
+}
+
 static bool check_segment(TSLexer *lexer) {
   while (check_token(lexer)) {
     skip(lexer);
@@ -418,32 +426,63 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     skip(lexer);
   }
 
-  // if (valid_symbols[STANDALONE_TAG_START]) {
-  //   if (check_closure(lexer, true, false)) {
-  //     int32_t open_bracket = lexer->lookahead;
-  //     skip(lexer);
-  //     if (check_tag_token(lexer)) {
-  //         int32_t tag_token = lexer->lookahead;
-  //         bool last_was_escape = false;
-  //         bool is_in_string = false;
-  //         int32_t string_char = 0;
-  //         while (true) {
-  //             skip(lexer);
+  // - Tags that start a line. All of these are zero-width tokens (mark_end was
+  //   called above), so the lookahead below is free.
   //
-  //             if ()
-  //         }
-  //     }
-  //     return false;
-  //   }
-  // }
-
-  // - Listitem ends
+  //     [ name ...]#      block tag:  open bracket, then space/tab
+  //     [# name #]        standalone: open bracket, sigil, space/tab, ...,
+  //                                   space/tab, sigil, close bracket, EOL
   int16_t newlines = 0;
-  if (valid_symbols[BLOCK_TAG_START] && check_closure(lexer, true, false)) {
+  if ((valid_symbols[STANDALONE_TAG_START] || valid_symbols[BLOCK_TAG_START]) &&
+      check_closure(lexer, true, false)) {
+    int32_t open_bracket = lexer->lookahead;
     skip(lexer);
-    if (check_tag_token(lexer))
+
+    if (istabspace(lexer)) {
+      if (valid_symbols[BLOCK_TAG_START])
+        return indent_block_tag(scanner, lexer, indent_length);
       return false;
-    return indent_block_tag(scanner, lexer, indent_length);
+    }
+
+    if (valid_symbols[STANDALONE_TAG_START] && check_tag_token(lexer)) {
+      int32_t tag_token = lexer->lookahead;
+      skip(lexer);
+
+      // the opener must be followed by a space or tab
+      if (!istabspace(lexer))
+        return false;
+
+      // find "<ws><sigil><close>" followed by end of line
+      bool prev_space = true;
+      while (true) {
+        int32_t c = lexer->lookahead;
+        if (c == '\0')
+          return false;
+
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+          prev_space = true;
+          skip(lexer);
+          continue;
+        }
+
+        if (prev_space && c == tag_token) {
+          skip(lexer);
+          if (compare_closure(open_bracket, lexer->lookahead)) {
+            skip(lexer);
+            if (!check_eol(lexer))
+              return false;
+            lexer->result_symbol = STANDALONE_TAG_START;
+            return true;
+          }
+          prev_space = false;
+          continue;
+        }
+
+        prev_space = false;
+        skip(lexer);
+      }
+    }
+    return false;
   }
 
   if (valid_symbols[LIST_END] || valid_symbols[LISTITEM_END] ||
