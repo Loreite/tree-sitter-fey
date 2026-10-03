@@ -37,6 +37,13 @@
     (vec)->len = 0;                                                            \
   }
 
+#define SER_MAX 1024
+#define PUT(v)                                                                 \
+  do {                                                                         \
+    if (i < SER_MAX)                                                           \
+      buffer[i++] = (char)(v);                                                 \
+  } while (0)
+
 enum TokenType {
   BLOCK_TAG_START,
   BLOCK_TAG_END,
@@ -82,66 +89,61 @@ typedef struct {
 static inline void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
 static inline void skip(TSLexer *lexer) { lexer->advance(lexer, true); }
 
+// Serialized layout (must match deserialize exactly):
+//   [base_indent hi][base_indent lo]
+//   [fence_len (0|1)] [fence indent][fence width][fence char]   (if fence_len)
+//   [tag_count]    [tag indents ...]        (all entries; no sentinel)
+//   [indent_count] [indents ...][bullets ...]  (entries after the sentinel)
+//   [sections ...]                          (entries after the sentinel; rest)
 unsigned serialize(Scanner *scanner, char *buffer) {
   size_t i = 0;
 
-  buffer[i++] = (scanner->base_indent >> 8) & 0xFF;
-  buffer[i++] = scanner->base_indent & 0xFF;
-  //
-  // buffer[i++] = scanner->fence_indent_stack->len;
-  // if (scanner->fence_indent_stack->len > 0) {
-  //   buffer[i++] = scanner->fence_indent_stack->data[0];
-  //   buffer[i++] = scanner->fence_width_stack->data[0];
-  //   buffer[i++] = scanner->fence_char_stack->data[0];
-  // }
-  //
-  // buffer[i++] = scanner->tag_bracket_stack->len;
-  // if (scanner->tag_bracket_stack->len > 0) {
-  //   buffer[i++] = scanner->tag_bracket_stack->data[0];
-  //   buffer[i++] = scanner->tag_token_stack->data[0];
-  // }
+  PUT((scanner->base_indent >> 8) & 0xFF);
+  PUT(scanner->base_indent & 0xFF);
 
-  size_t tag_indent_count = scanner->tag_indent_length_stack->len - 1;
-  if (tag_indent_count > UINT8_MAX)
-    tag_indent_count = UINT8_MAX;
-  buffer[i++] = tag_indent_count;
-
-  int iter = 1;
-  for (; iter < scanner->tag_indent_length_stack->len &&
-          i < TREE_SITTER_SERIALIZATION_BUFFER_SIZE;
-         ++iter) {
-    buffer[i++] = scanner->tag_indent_length_stack->data[iter];
+  // fences don't nest: at most one entry is ever live
+  if (scanner->fence_indent_stack->len > 0) {
+    PUT(1);
+    PUT(VEC_BACK(scanner->fence_indent_stack));
+    PUT(VEC_BACK(scanner->fence_width_stack));
+    PUT(VEC_BACK(scanner->fence_char_stack));
+  } else {
+    PUT(0);
   }
 
-  size_t indent_count = scanner->indent_length_stack->len - 1;
-  if (indent_count > UINT8_MAX)
-    indent_count = UINT8_MAX;
-  buffer[i++] = indent_count;
-
-  int iter = 1;
-  for (; iter < scanner->indent_length_stack->len &&
-         i < TREE_SITTER_SERIALIZATION_BUFFER_SIZE;
-       ++iter) {
-    buffer[i++] = scanner->indent_length_stack->data[iter];
+  // tag_indent_length_stack has NO sentinel: serialize every entry
+  uint32_t tag_count = scanner->tag_indent_length_stack->len;
+  if (tag_count > 128)
+    tag_count = 128;
+  PUT(tag_count);
+  for (uint32_t j = 0; j < tag_count; ++j) {
+    int16_t v = scanner->tag_indent_length_stack->data[j];
+    PUT(v > 255 ? 255 : v);
   }
 
-  iter = 1;
-  for (; iter < scanner->bullet_stack->len &&
-         i < TREE_SITTER_SERIALIZATION_BUFFER_SIZE;
-       ++iter) {
-    buffer[i++] = scanner->bullet_stack->data[iter];
+  // indent/bullet stacks have a sentinel at index 0: skip it
+  uint32_t indent_count = scanner->indent_length_stack->len
+                              ? scanner->indent_length_stack->len - 1
+                              : 0;
+  if (indent_count > 128)
+    indent_count = 128;
+  PUT(indent_count);
+  for (uint32_t j = 1; j <= indent_count; ++j) {
+    int16_t v = scanner->indent_length_stack->data[j];
+    PUT(v > 255 ? 255 : v);
+  }
+  for (uint32_t j = 1; j <= indent_count; ++j) {
+    PUT(scanner->bullet_stack->data[j]);
   }
 
-  iter = 1;
-  for (; iter < scanner->section_stack->len &&
-         i < TREE_SITTER_SERIALIZATION_BUFFER_SIZE;
-       ++iter) {
-    buffer[i++] = scanner->section_stack->data[iter];
+  for (uint32_t j = 1; j < scanner->section_stack->len && i < SER_MAX; ++j) {
+    PUT(scanner->section_stack->data[j]);
   }
 
-  return i;
+  return (unsigned)i;
 }
 
+#define GET() ((i < length) ? (uint8_t)buffer[i++] : (i++, 0))
 void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
   VEC_CLEAR(scanner->section_stack);
   VEC_PUSH(scanner->section_stack, 0);
@@ -153,78 +155,66 @@ void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
   VEC_CLEAR(scanner->fence_indent_stack);
   VEC_CLEAR(scanner->fence_width_stack);
   VEC_CLEAR(scanner->fence_char_stack);
-
-  // VEC_CLEAR(scanner->tag_bracket_stack);
-  // VEC_CLEAR(scanner->tag_token_stack);
   VEC_CLEAR(scanner->tag_indent_length_stack);
 
   scanner->base_indent = -1;
 
-  if (length == 0)
+  if (length < 3)
     return;
 
   size_t i = 0;
 
-  if (length >= 2) {
-    scanner->base_indent =
-        (int16_t)((((uint8_t)buffer[0]) << 8) | ((uint8_t)buffer[1]));
-    i += 2;
-  }
+  uint8_t base_hi = GET(); // separate statements: operand order is unspecified
+  uint8_t base_lo = GET();
+  scanner->base_indent = (int16_t)((base_hi << 8) | base_lo);
 
-  uint8_t fence_len = (uint8_t)buffer[i++];
+  uint8_t fence_len = GET();
   if (fence_len > 0) {
-    VEC_PUSH(scanner->fence_indent_stack, buffer[i++]);
-    VEC_PUSH(scanner->fence_width_stack, buffer[i++]);
-    VEC_PUSH(scanner->fence_char_stack, buffer[i++]);
+    VEC_PUSH(scanner->fence_indent_stack, GET());
+    VEC_PUSH(scanner->fence_width_stack, GET());
+    VEC_PUSH(scanner->fence_char_stack, GET());
   }
 
-  // uint8_t tag_len = (uint8_t)buffer[i++];
-  // if (tag_len > 0) {
-  //   VEC_PUSH(scanner->tag_bracket_stack, buffer[i++]);
-  //   VEC_PUSH(scanner->tag_token_stack, buffer[i++]);
-  // }
-
-  size_t tag_indent_count = (uint8_t)buffer[i++];
-
-  for (size_t j = 0; j < tag_indent_count; j++) {
-    VEC_PUSH(scanner->tag_indent_length_stack, buffer[i++]);
-}
-
-  size_t indent_count = (uint8_t)buffer[i++];
-
-  // Use independent loop counter (j) so 'i' can safely track the buffer index
-  for (size_t j = 0; j < indent_count; j++) {
-    VEC_PUSH(scanner->indent_length_stack, buffer[i++]);
+  uint8_t tag_count = GET();
+  for (uint8_t j = 0; j < tag_count && i <= length; j++) {
+    VEC_PUSH(scanner->tag_indent_length_stack, GET());
   }
 
-  for (size_t j = 0; j < indent_count; j++) {
-    VEC_PUSH(scanner->bullet_stack, buffer[i++]);
+  uint8_t indent_count = GET();
+  for (uint8_t j = 0; j < indent_count && i <= length; j++) {
+    VEC_PUSH(scanner->indent_length_stack, GET());
+  }
+  for (uint8_t j = 0; j < indent_count && i <= length; j++) {
+    VEC_PUSH(scanner->bullet_stack, GET());
   }
 
-  // Safely consume all remaining bytes for the section stack
   while (i < length) {
-    VEC_PUSH(scanner->section_stack, buffer[i++]);
+    VEC_PUSH(scanner->section_stack, GET());
   }
 }
+#undef GET
 
 static bool in_error_recovery(const bool *valid_symbols) {
-  return (valid_symbols[LIST_START]      //
+  return (valid_symbols[LIST_START]         //
           && valid_symbols[BLOCK_TAG_START] //
           && valid_symbols[BLOCK_TAG_END]   //
-          && valid_symbols[LIST_END]     //
-          && valid_symbols[LISTITEM_END] //
-          && valid_symbols[BULLET]       //
-          && valid_symbols[FENCE]        //
-          && valid_symbols[SIGNATURE]    //
-          && valid_symbols[SECTION_END]  //
-          && valid_symbols[ENDOFFILE]    //
-          && valid_symbols[TAG_NL]       //
+          && valid_symbols[LIST_END]        //
+          && valid_symbols[LISTITEM_END]    //
+          && valid_symbols[BULLET]          //
+          && valid_symbols[FENCE]           //
+          && valid_symbols[SIGNATURE]       //
+          && valid_symbols[SECTION_END]     //
+          && valid_symbols[ENDOFFILE]       //
+          && valid_symbols[TAG_NL]          //
   );
 }
 
 static bool dedent(Scanner *scanner, TSLexer *lexer) {
-  VEC_POP(scanner->indent_length_stack);
-  VEC_POP(scanner->bullet_stack);
+  // index 0 is the sentinel; never pop it (len is unsigned: 0 - 1 wraps)
+  if (scanner->indent_length_stack->len > 1)
+    VEC_POP(scanner->indent_length_stack);
+  if (scanner->bullet_stack->len > 1)
+    VEC_POP(scanner->bullet_stack);
   lexer->result_symbol = LIST_END;
   return true;
 }
@@ -232,7 +222,8 @@ static bool dedent(Scanner *scanner, TSLexer *lexer) {
 static bool dedent_block_tag(Scanner *scanner, TSLexer *lexer) {
   // VEC_POP(scanner->tag_bracket_stack);
   // VEC_POP(scanner->tag_token_stack);
-  VEC_POP(scanner->tag_indent_length_stack);
+  if (scanner->tag_indent_length_stack->len > 0)
+    VEC_POP(scanner->tag_indent_length_stack);
   lexer->result_symbol = BLOCK_TAG_END;
   return true;
 }
@@ -245,7 +236,8 @@ static bool indent(Scanner *scanner, TSLexer *lexer, int16_t indent_length,
   return true;
 }
 
-static bool indent_block_tag(Scanner *scanner, TSLexer *lexer, int16_t indent_length) {
+static bool indent_block_tag(Scanner *scanner, TSLexer *lexer,
+                             int16_t indent_length) {
   VEC_PUSH(scanner->tag_indent_length_stack, indent_length);
   lexer->result_symbol = BLOCK_TAG_START;
   return true;
@@ -374,9 +366,9 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
 
       // Check if we are inside a list item
       if (scanner->indent_length_stack->len > 1) {
-        int16_t current_list_indent = VEC_BACK(scanner->indent_length_stack);
-        // Fail token validation if indented lower than the active listitem
-        if (indent_length < current_list_indent) {
+        if (indent_length < VEC_BACK(scanner->indent_length_stack)        //
+            || indent_length < VEC_BACK(scanner->tag_indent_length_stack) //
+        ) {
           return false;
         }
       }
@@ -395,14 +387,19 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     } else if (lexer->lookahead == '\t') {
       indent_length += 8;
     } else if (lexer->lookahead == '\0') {
+      //
       if (valid_symbols[LIST_END]) {
         lexer->result_symbol = LIST_END;
+        //
       } else if (valid_symbols[BLOCK_TAG_END]) {
         lexer->result_symbol = BLOCK_TAG_END;
+        //
       } else if (valid_symbols[SECTION_END]) {
         lexer->result_symbol = SECTION_END;
+        //
       } else if (valid_symbols[ENDOFFILE]) {
         lexer->result_symbol = ENDOFFILE;
+        //
       } else
         return false;
 
@@ -415,17 +412,40 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
 
   // - Listitem ends
   int16_t newlines = 0;
-  if (valid_symbols[LIST_END] || valid_symbols[LISTITEM_END] || valid_symbols[BLOCK_TAG_END]) {
+  if (valid_symbols[BLOCK_TAG_START] && check_closure(lexer, true, false)) {
+    skip(lexer);
+    if (check_tag_token(lexer))
+      return false;
+    return indent_block_tag(scanner, lexer, indent_length);
+  }
+
+  if (valid_symbols[LIST_END] || valid_symbols[LISTITEM_END] ||
+      valid_symbols[BLOCK_TAG_END]) {
     while (true) {
       if (lexer->lookahead == ' ') {
         indent_length++;
       } else if (lexer->lookahead == '\t') {
         indent_length += 8;
       } else if (lexer->lookahead == '\0') {
-        return dedent(scanner, lexer);
-      } else if (lexer->lookahead == '\n') {
-        if (++newlines > 1)
+        // Protect against stack underflow
+        if (valid_symbols[BLOCK_TAG_END] &&
+            scanner->tag_indent_length_stack->len > 0) {
+          return dedent_block_tag(scanner, lexer);
+        }
+        if (valid_symbols[LIST_END]) {
           return dedent(scanner, lexer);
+        }
+        break; // Escape if neither applies
+      } else if (lexer->lookahead == '\n') {
+        if (++newlines > 1) {
+          if (valid_symbols[BLOCK_TAG_END] &&
+              scanner->tag_indent_length_stack->len > 0) {
+            return dedent_block_tag(scanner, lexer);
+          }
+          if (valid_symbols[LIST_END]) {
+            return dedent(scanner, lexer);
+          }
+        }
         indent_length = 0;
       } else {
         break;
@@ -433,8 +453,9 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       skip(lexer);
     }
 
-    if (valid_symbols[BLOCK_TAG_END] && scanner->tag_indent_length_stack->len > 0) {
-      if (indent_length < VEC_BACK(scanner->tag_indent_length_stack)) {
+    if (valid_symbols[BLOCK_TAG_END] &&
+        scanner->tag_indent_length_stack->len > 0) {
+      if (indent_length <= VEC_BACK(scanner->tag_indent_length_stack)) {
         return dedent_block_tag(scanner, lexer);
       }
     }
@@ -564,6 +585,8 @@ bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     if (indent_length == scanner->base_indent + 2) {
       if (scanner->is_at_section_start && valid_symbols[LIST_END]) {
         return dedent(scanner, lexer);
+      } else if (scanner->is_at_section_start && valid_symbols[BLOCK_TAG_END]) {
+        return dedent_block_tag(scanner, lexer);
       }
 
       if (valid_symbols[SECTION_END]                      //

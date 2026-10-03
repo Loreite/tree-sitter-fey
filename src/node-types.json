@@ -56,6 +56,76 @@
     }
   },
   {
+    "type": "block_tag",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "body",
+            "named": true
+          }
+        ]
+      },
+      "head": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "head",
+            "named": true
+          }
+        ]
+      },
+      "key_value": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "value",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "tag_name",
+            "named": true
+          }
+        ]
+      },
+      "tag_closure": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "tag_end",
+            "named": true
+          },
+          {
+            "type": "tag_start",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "value",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "body",
     "named": true,
     "fields": {},
@@ -65,6 +135,10 @@
       "types": [
         {
           "type": "block",
+          "named": true
+        },
+        {
+          "type": "block_tag",
           "named": true
         },
         {
@@ -264,6 +338,25 @@
     "fields": {}
   },
   {
+    "type": "head",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "expr",
+          "named": true
+        },
+        {
+          "type": "simple_tag",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "heading",
     "named": true,
     "fields": {
@@ -341,6 +434,10 @@
           },
           {
             "type": "block",
+            "named": true
+          },
+          {
+            "type": "block_tag",
             "named": true
           },
           {
