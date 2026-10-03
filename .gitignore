@@ -1,5 +1,7 @@
 # Rust artifacts
 target/
+src/parser.c
+src/grammar.json
 
 misc/
 
