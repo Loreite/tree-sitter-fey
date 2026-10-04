@@ -145,6 +145,7 @@ typedef struct {
 
   pair_stack *pair_stack;
 
+  int16_t block_tag_col;
   bool is_at_section_start;
   // Set when a pair was implicitly closed at the start of a heading line:
   // the text run that held the pair still needs its end of line, so the
@@ -895,7 +896,7 @@ static bool scan_bracket(Scanner *scanner, TSLexer *lexer,
     switch (shape) {
     case SHAPE_BLOCK_TAG:
       if (valid_symbols[BLOCK_TAG_START])
-        return indent_block_tag(scanner, lexer, indent_length);
+        return indent_block_tag(scanner, lexer, scanner->block_tag_col);
       return false;
     case SHAPE_PAIR_INLINE:
     case SHAPE_PAIR_BLOCK:
@@ -1082,6 +1083,7 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       check_closure(lexer, true, false) &&
       !container_end_pending(scanner, lexer, valid_symbols, indent_length,
                              skipped)) {
+    scanner->block_tag_col = lexer->get_column(lexer);
     return scan_bracket(scanner, lexer, valid_symbols, indent_length);
   }
 
