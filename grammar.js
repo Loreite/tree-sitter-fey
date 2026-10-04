@@ -50,7 +50,7 @@ const reTagClose = /[.,:;!?\\/\-_+*=~^%@&#$][\]})>]/;
 const reWs = /[ \t]/;
 const reWsPlus = /[ \t]+/;
 
-const reCellEscape = /\\[|+*~\\]/;
+const reCellEscape = /\\[|.,:;!?\\/\-+*=~^%@&#$]/;
 const reSegment = /[.,:;!?\\/'"`\-+*=~^%@&#$\[\](){}<>]/;
 const reFence = /[.,:;!?\\/'"`\-+*=~^%@&#$]+/;
 
@@ -155,7 +155,7 @@ export default grammar({
       $.block,
       $.block_tag,
       alias($._block_pair_tag, $.pair_tag),
-      $.standalone_simple_tag,
+      $._standalone_scope_tag,
     ),
 
     section: $ => seq(
@@ -347,7 +347,7 @@ export default grammar({
       $ => seq($._tag_head, tag_close($, ws_end(close), bare_end(close))),
     ])),
 
-    // Shared by line_tag, simple_multi_tag and pair_open.
+    // Shared by line_tag, scope_multi_tag and pair_open.
     _tag_head: $ => seq(
       repeat($._tag_nl),
       field('name', alias(nim(reTagName), $.tag_name)),
@@ -453,7 +453,7 @@ export default grammar({
 
     // Bracket-agnostic on purpose: one regex token for the open bracket and
     // one for `<ws><token><close>`. Spelling out the 76 bracket x token
-    // combinations (as simple_multi_tag does) overflows tree-sitter's 65535
+    // combinations (as scope_multi_tag does) overflows tree-sitter's 65535
     // parse-action limit. The scanner already verified that the closer
     // matches the opening bracket before emitting _pair_open_start /
     // _pair_block_start, so the grammar does not need to repeat it.
@@ -475,13 +475,13 @@ export default grammar({
 
     stray_close: $ => $._pair_stray_close,
 
-    standalone_simple_tag: $ => seq(
+    _standalone_scope_tag: $ => seq(
       $._standalone_tag_start,
-      alias($.simple_multi_tag, $.simple_tag),
+      alias($.scope_multi_tag, $.scope_tag),
       $._eol,
     ),
 
-    simple_multi_tag: $ => choice(
+    scope_multi_tag: $ => choice(
       ...tagBrackets.flatMap(([open, close]) =>
         tagTokens.map(tok => seq(
           field('tag_closure', alias(token(seq(nim(open), imm(tok), imm(reWs))), $.tag_start)),
@@ -491,7 +491,7 @@ export default grammar({
       )
     ),
 
-    simple_line_tag: $ => choice(
+    scope_line_tag: $ => choice(
       ...tagBrackets.flatMap(([open, close]) =>
         tagTokens.map(tok => seq(
           field('tag_closure', alias(token(seq(nim(open), imm(tok), imm(reWs))), $.tag_start)),
@@ -501,7 +501,7 @@ export default grammar({
       )
     ),
 
-    // Single-line counterpart of _tag_head, shared by every simple_line_tag.
+    // Single-line counterpart of _tag_head, shared by every scope_line_tag.
     _tag_line_head: $ => seq(
       field('name', alias(nim(reTagName), $.tag_name)),
       repeat($._tag_line_value_choice),
@@ -555,19 +555,19 @@ export default grammar({
       repeat(seq(optional($._tag_value_nl), tag_word(',;', ']})>'))),
     ),
 
-    // Single-line value, for simple_line_tag (table cells).
+    // Single-line value, for scope_line_tag (table cells).
     _tag_line_value: $ => repeat1(tag_word(',;', ']})>')),
 
     _expr_line: $ => repeat1($.expr),
 
     _tagged_cell_line: $ => repeat1(choice(
-      alias($.cell_expr, $.expr), alias($.simple_line_tag, $.simple_tag)
+      alias($.cell_expr, $.expr), alias($.scope_line_tag, $.scope_tag)
     )),
 
-    _tagged_expr_line: $ => repeat1(choice(
-      $.expr,
-      alias($.simple_line_tag, $.simple_tag),
-    )),
+    // _tagged_expr_line: $ => repeat1(choice(
+    //   $.expr,
+    //   alias($.scope_line_tag, $.scope_tag),
+    // )),
 
     _tagged_expr_multi_line: $ => repeat1($._inline_item),
 
@@ -575,7 +575,7 @@ export default grammar({
     _inline_item: $ => choice(
       $.expr,
       $.line_tag,
-      alias($.simple_multi_tag, $.simple_tag),
+      alias($.scope_multi_tag, $.scope_tag),
       $.pair_tag,
       $.stray_close,
     ),
@@ -628,7 +628,7 @@ function ws_end(...parts) {
 function line_tag_body(skip, $) {
   return repeat1(choice(
     tag_word(skip), $.line_tag,
-    alias($.simple_multi_tag, $.simple_tag),
+    alias($.scope_multi_tag, $.scope_tag),
     $.pair_tag, $.stray_close,
   ));
 }

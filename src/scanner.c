@@ -1171,6 +1171,9 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   }
 
   bool fence_looked_ahead = false;
+  // Decide "delimiters run straight into the line end" BEFORE the fence
+  // lookahead below can skip the single space after them.
+  bool delims_hit_eol = lexer->lookahead == '\n' || lexer->lookahead == '\r';
   if (fenceable) {
     bool valid_fence_suffix = false;
     if (lexer->lookahead == '\n' || lexer->lookahead == '\r' ||
@@ -1211,7 +1214,8 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   bool is_bullet = false;
   bool is_signature = false;
 
-  if (lexer->lookahead != '\n' && lexer->lookahead != '\r') {
+  // if (lexer->lookahead != '\n' && lexer->lookahead != '\r') {
+  if (!delims_hit_eol) {
     bool has_second_space = false;
     if (fence_looked_ahead || istabspace(lexer)) {
       if (!fence_looked_ahead)
@@ -1294,8 +1298,6 @@ void *tree_sitter_fey_external_scanner_create() {
   scanner->bullet_stack = (stack *)calloc(1, sizeof(stack));
   scanner->section_stack = (stack *)calloc(1, sizeof(stack));
 
-  // scanner->tag_bracket_stack = (stack *)calloc(1, sizeof(stack));
-  // scanner->tag_token_stack = (stack *)calloc(1, sizeof(stack));
   scanner->tag_indent_length_stack = (stack *)calloc(1, sizeof(stack));
 
   scanner->fence_indent_stack = (stack *)calloc(1, sizeof(stack));
@@ -1335,8 +1337,6 @@ void tree_sitter_fey_external_scanner_destroy(void *payload) {
   VEC_FREE(scanner->bullet_stack);
   VEC_FREE(scanner->section_stack);
 
-  // VEC_FREE(scanner->tag_bracket_stack);
-  // VEC_FREE(scanner->tag_token_stack);
   VEC_FREE(scanner->tag_indent_length_stack);
 
   VEC_FREE(scanner->fence_indent_stack);
@@ -1349,8 +1349,6 @@ void tree_sitter_fey_external_scanner_destroy(void *payload) {
   free(scanner->fence_width_stack);
   free(scanner->fence_char_stack);
 
-  // free(scanner->tag_bracket_stack);
-  // free(scanner->tag_token_stack);
   free(scanner->tag_indent_length_stack);
 
   free(scanner->pair_stack);
