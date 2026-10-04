@@ -67,6 +67,7 @@ enum TokenType {
   PAIR_CLOSE_START,
   PAIR_STRAY_CLOSE,
   TAG_VALUE_NL,
+  PAIR_IMPLICIT_CLOSE,
 };
 
 typedef enum {
@@ -95,6 +96,12 @@ typedef struct {
 //   table: 1 byte  (index into HTML_NAMES)
 //   hash:  3 bytes (big-endian 24-bit FNV-1a fold)
 //
+// floors (the portal)
+//   indent_floor / tag_floor are the lengths of indent_length_stack and
+//   tag_indent_length_stack when the pair opened. Inside the body only the
+//   entries above the floor count, so the body starts from a fresh
+//   indentation root no matter which list item or block tag holds the opener.
+//
 // PAIR_FORGOTTEN marks an entry whose details did not fit in the serialized
 // state (see serialize()); it matches any closer. A real flag is at most
 // (18 << 3) | (3 << 1) | 1 = 0x97, so 0xFF can never collide.
@@ -113,6 +120,8 @@ typedef struct {
   uint8_t flag;
   uint8_t table_idx;
   uint32_t hash24;
+  uint8_t indent_floor;
+  uint8_t tag_floor;
 } PairEntry;
 
 typedef struct {
@@ -137,11 +146,54 @@ typedef struct {
   pair_stack *pair_stack;
 
   bool is_at_section_start;
+  // Set when a pair was implicitly closed at the start of a heading line:
+  // the text run that held the pair still needs its end of line, so the
+  // next scan owes it a zero-width ENDOFFILE (the grammar's _eol).
+  bool eol_owed;
   int16_t base_indent;
 } Scanner;
 
 static inline void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
 static inline void skip(TSLexer *lexer) { lexer->advance(lexer, true); }
+
+// ---- indentation roots -------------------------------------------------
+//
+// indent_length_stack has a sentinel at index 0, so outside any pair the
+// floor is 1; tag_indent_length_stack has none, so its floor is 0.
+
+static uint32_t indent_floor(Scanner *s) {
+  pair_stack *ps = s->pair_stack;
+  uint32_t f = ps->len ? ps->data[ps->len - 1].indent_floor : 1;
+  return f < 1 ? 1 : f;
+}
+
+static uint32_t tag_floor(Scanner *s) {
+  pair_stack *ps = s->pair_stack;
+  return ps->len ? ps->data[ps->len - 1].tag_floor : 0;
+}
+
+// Is a list open in the current indentation root?
+static bool in_list(Scanner *s) {
+  return s->indent_length_stack->len > indent_floor(s);
+}
+
+// Is a block tag open in the current indentation root?
+static bool in_block_tag(Scanner *s) {
+  return s->tag_indent_length_stack->len > tag_floor(s);
+}
+
+// Innermost list indent in the current root, or -1 (the root itself).
+static int16_t indent_top(Scanner *s) {
+  return in_list(s) ? VEC_BACK(s->indent_length_stack) : -1;
+}
+
+static int16_t bullet_top(Scanner *s) {
+  return in_list(s) ? VEC_BACK(s->bullet_stack) : NOTABULLET;
+}
+
+static int16_t tag_top(Scanner *s) {
+  return in_block_tag(s) ? VEC_BACK(s->tag_indent_length_stack) : -1;
+}
 
 // ---- pair helpers ----------------------------------------------------------
 
@@ -252,6 +304,8 @@ static PairEntry make_entry(const NameAcc *n, int bracket, int token) {
                      (is_hash ? PAIR_FLAG_HASH : 0));
   e.table_idx = idx;
   e.hash24 = h24;
+  e.indent_floor = 0;
+  e.tag_floor = 0;
   return e;
 }
 
@@ -266,14 +320,15 @@ static bool entry_matches(PairEntry top, PairEntry closer) {
 
 // ---------------------------------------------------------------------------
 // Serialized layout (must match deserialize exactly):
-//   [base_indent hi][base_indent lo]
+//   [base_indent hi][base_indent lo][eol_owed]
 //   [fence_len (0|1)] [fence indent][fence width][fence char]   (if fence_len)
 //   [tag_count]    [tag indents ...]        (all entries; no sentinel)
 //   [pair_depth hi][pair_depth lo][pair_stored]
 //                  [entries ...]            (innermost `pair_stored` entries,
 //                                            oldest -> newest; each entry is
 //                                            flag + 1 byte (table) or
-//                                            flag + 3 bytes (hash))
+//                                            flag + 3 bytes (hash), then
+//                                            indent_floor + tag_floor)
 //   [indent_count] [indents ...][bullets ...]  (entries after the sentinel)
 //   [sections ...]                          (entries after the sentinel; rest)
 //
@@ -284,6 +339,7 @@ static unsigned serialize(Scanner *scanner, char *buffer) {
 
   PUT((scanner->base_indent >> 8) & 0xFF);
   PUT(scanner->base_indent & 0xFF);
+  PUT(scanner->eol_owed ? 1 : 0);
 
   // fences don't nest: at most one entry is ever live
   if (scanner->fence_indent_stack->len > 0) {
@@ -322,9 +378,7 @@ static unsigned serialize(Scanner *scanner, char *buffer) {
   long used = 0;
   while (stored < ps->len && stored < 255) {
     PairEntry e = ps->data[ps->len - 1 - stored];
-    long need = (e.flag == PAIR_FORGOTTEN)  ? 1
-                : (e.flag & PAIR_FLAG_HASH) ? 4
-                                            : 2;
+    long need = (e.flag & PAIR_FLAG_HASH) ? 6 : 4;
     if (e.flag == PAIR_FORGOTTEN || used + need > budget)
       break; // a forgotten entry stays forgotten, and so does all below it
     used += need;
@@ -343,6 +397,8 @@ static unsigned serialize(Scanner *scanner, char *buffer) {
     } else {
       PUT(e.table_idx);
     }
+    PUT(e.indent_floor);
+    PUT(e.tag_floor);
   }
 
   PUT(indent_count);
@@ -377,6 +433,7 @@ static void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
   VEC_CLEAR(scanner->pair_stack);
 
   scanner->base_indent = -1;
+  scanner->eol_owed = false;
 
   if (length < 3)
     return;
@@ -386,6 +443,7 @@ static void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
   uint8_t base_hi = GET(); // separate statements: operand order is unspecified
   uint8_t base_lo = GET();
   scanner->base_indent = (int16_t)((base_hi << 8) | base_lo);
+  scanner->eol_owed = GET() != 0;
 
   uint8_t fence_len = GET();
   if (fence_len > 0) {
@@ -405,12 +463,14 @@ static void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
   uint32_t pair_stored = GET();
   if (pair_stored > pair_depth)
     pair_stored = pair_depth; // corrupt input: never underflow
-  PairEntry forgotten = {PAIR_FORGOTTEN, 0, 0};
+  // Forgotten entries lost their floors too; 0 means "no portal", which
+  // only matters if one of them becomes the innermost entry again.
+  PairEntry forgotten = {PAIR_FORGOTTEN, 0, 0, 0, 0};
   for (uint32_t j = 0; j < pair_depth - pair_stored; j++) {
     VEC_PUSH(scanner->pair_stack, forgotten);
   }
   for (uint32_t j = 0; j < pair_stored; j++) {
-    PairEntry e = {0, 0, 0};
+    PairEntry e = {0, 0, 0, 0, 0};
     e.flag = GET();
     if (e.flag & PAIR_FLAG_HASH) {
       uint8_t b0 = GET();
@@ -420,6 +480,8 @@ static void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
     } else {
       e.table_idx = GET();
     }
+    e.indent_floor = GET();
+    e.tag_floor = GET();
     VEC_PUSH(scanner->pair_stack, e);
   }
 
@@ -453,11 +515,12 @@ static bool in_error_recovery(const bool *valid_symbols) {
 }
 
 static bool dedent(Scanner *scanner, TSLexer *lexer) {
-  // index 0 is the sentinel; never pop it (len is unsigned: 0 - 1 wraps)
-  if (scanner->indent_length_stack->len > 1)
+  // Never pop the sentinel, nor a list that belongs outside the current
+  // pair (len is unsigned: 0 - 1 wraps).
+  if (in_list(scanner)) {
     VEC_POP(scanner->indent_length_stack);
-  if (scanner->bullet_stack->len > 1)
     VEC_POP(scanner->bullet_stack);
+  }
   lexer->result_symbol = LIST_END;
   return true;
 }
@@ -465,7 +528,7 @@ static bool dedent(Scanner *scanner, TSLexer *lexer) {
 static bool dedent_block_tag(Scanner *scanner, TSLexer *lexer) {
   // VEC_POP(scanner->tag_bracket_stack);
   // VEC_POP(scanner->tag_token_stack);
-  if (scanner->tag_indent_length_stack->len > 0)
+  if (in_block_tag(scanner))
     VEC_POP(scanner->tag_indent_length_stack);
   lexer->result_symbol = BLOCK_TAG_END;
   return true;
@@ -709,6 +772,11 @@ static bool scan_pair_open(Scanner *scanner, TSLexer *lexer,
     return false; // D5: refuse rather than overflow the serialized depth
 
   PairEntry e = make_entry(name, bracket, token);
+  uint32_t ifl = scanner->indent_length_stack->len;
+  uint32_t tfl = scanner->tag_indent_length_stack->len;
+  e.indent_floor = (uint8_t)(ifl > 255 ? 255 : ifl);
+  e.tag_floor = (uint8_t)(tfl > 255 ? 255 : tfl);
+  scanner->eol_owed = false;
   VEC_PUSH(scanner->pair_stack, e);
   lexer->result_symbol = sym;
   return true;
@@ -718,8 +786,9 @@ static bool scan_pair_open(Scanner *scanner, TSLexer *lexer,
 static bool scan_token_tag(Scanner *scanner, TSLexer *lexer,
                            const bool *valid_symbols, int32_t open,
                            int32_t tag_token) {
-  bool want_close =
-      valid_symbols[PAIR_CLOSE_START] || valid_symbols[PAIR_STRAY_CLOSE];
+  bool want_close = valid_symbols[PAIR_CLOSE_START] ||
+                    valid_symbols[PAIR_STRAY_CLOSE] ||
+                    valid_symbols[PAIR_IMPLICIT_CLOSE];
   bool prev_space = true;
 
   while (istabspace(lexer))
@@ -745,11 +814,26 @@ static bool scan_token_tag(Scanner *scanner, TSLexer *lexer,
       if (valid_symbols[PAIR_CLOSE_START] && ps->len > 0 &&
           entry_matches(VEC_BACK(ps), closer)) {
         VEC_POP(ps);
+        scanner->eol_owed = false;
         lexer->result_symbol = PAIR_CLOSE_START; // zero-width
         return true;
       }
+      // Matches an outer opener: close the innermost one implicitly and
+      // leave the closer in place (zero-width). The scan repeats until the
+      // closer reaches its opener.
+      if (valid_symbols[PAIR_IMPLICIT_CLOSE] && ps->len > 1) {
+        for (uint32_t j = ps->len - 1; j-- > 0;) {
+          if (entry_matches(ps->data[j], closer)) {
+            VEC_POP(ps);
+            scanner->eol_owed = false;
+            lexer->result_symbol = PAIR_IMPLICIT_CLOSE;
+            return true;
+          }
+        }
+      }
       if (valid_symbols[PAIR_STRAY_CLOSE]) {
         lexer->mark_end(lexer); // covers the whole `[# name ]`
+        scanner->eol_owed = false;
         lexer->result_symbol = PAIR_STRAY_CLOSE;
         return true;
       }
@@ -824,7 +908,8 @@ static bool scan_bracket(Scanner *scanner, TSLexer *lexer,
 
   if (check_tag_token(lexer)) {
     if (!(valid_symbols[STANDALONE_TAG_START] ||
-          valid_symbols[PAIR_CLOSE_START] || valid_symbols[PAIR_STRAY_CLOSE]))
+          valid_symbols[PAIR_CLOSE_START] || valid_symbols[PAIR_STRAY_CLOSE] ||
+          valid_symbols[PAIR_IMPLICIT_CLOSE]))
       return false;
     int32_t tag_token = lexer->lookahead;
     advance(lexer);
@@ -845,11 +930,9 @@ static bool container_end_pending(Scanner *scanner, TSLexer *lexer,
                                   const bool *valid_symbols,
                                   int16_t indent_length, uint32_t skipped) {
   bool list_end = (valid_symbols[LIST_END] || valid_symbols[LISTITEM_END]) &&
-                  scanner->indent_length_stack->len > 1 &&
-                  indent_length <= VEC_BACK(scanner->indent_length_stack);
-  bool tag_end = valid_symbols[BLOCK_TAG_END] &&
-                 scanner->tag_indent_length_stack->len > 0 &&
-                 indent_length <= VEC_BACK(scanner->tag_indent_length_stack);
+                  in_list(scanner) && indent_length <= indent_top(scanner);
+  bool tag_end = valid_symbols[BLOCK_TAG_END] && in_block_tag(scanner) &&
+                 indent_length <= tag_top(scanner);
   if (!list_end && !tag_end)
     return false;
   return lexer->get_column(lexer) == skipped; // only at the start of a line
@@ -861,6 +944,17 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
 
   scanner->is_at_section_start = false;
   uint32_t skipped = 0;
+
+  // eol_owed holds for exactly the scan after the implicit close that set
+  // it (the state is restored from the last external token before every
+  // scan, so clearing it here persists only if this scan emits a token).
+  bool eol_owed = scanner->eol_owed;
+  scanner->eol_owed = false;
+  if (eol_owed && valid_symbols[ENDOFFILE]) {
+    lexer->mark_end(lexer);
+    lexer->result_symbol = ENDOFFILE; // zero-width _eol for the text run
+    return true;
+  }
 
   // Handle explicit tag newlines with active list-indent checks.
   //
@@ -901,13 +995,14 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       }
       lexer->mark_end(lexer);
 
-      // Check if we are inside a list item
-      if (scanner->indent_length_stack->len > 1) {
-        if (indent_length < VEC_BACK(scanner->indent_length_stack)) {
+      // A multi-line tag head may not dedent out of its list item or block
+      // tag (only those in the current indentation root count).
+      if (in_list(scanner)) {
+        if (indent_length < indent_top(scanner)) {
           return false;
         }
-      } else if (scanner->tag_indent_length_stack->len > 1) {
-        if (indent_length < VEC_BACK(scanner->tag_indent_length_stack)) {
+      } else if (in_block_tag(scanner)) {
+        if (indent_length < tag_top(scanner)) {
           return false;
         }
       }
@@ -921,10 +1016,12 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       }
 
       if (!closer && !blank_only && valid_symbols[TAG_VALUE_NL]) {
+        scanner->eol_owed = false;
         lexer->result_symbol = TAG_VALUE_NL;
         return true;
       }
       if (valid_symbols[TAG_NL]) {
+        scanner->eol_owed = false;
         lexer->result_symbol = TAG_NL;
         return true;
       }
@@ -941,6 +1038,12 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     } else if (lexer->lookahead == '\t') {
       indent_length += 8;
     } else if (lexer->lookahead == '\0') {
+      // An unclosed pair ends with the input.
+      if (valid_symbols[PAIR_IMPLICIT_CLOSE] && scanner->pair_stack->len > 0) {
+        VEC_POP(scanner->pair_stack);
+        lexer->result_symbol = PAIR_IMPLICIT_CLOSE;
+        return true;
+      }
       //
       if (valid_symbols[LIST_END]) {
         lexer->result_symbol = LIST_END;
@@ -966,11 +1069,16 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     skipped++;
   }
 
+  // Only a token at the very start of a line may implicitly close a pair
+  // before a heading (checked at the signature test below).
+  bool at_line_start = lexer->get_column(lexer) == skipped;
+
   // - Tags that start with an open bracket (see scan_bracket)
   int16_t newlines = 0;
   if ((valid_symbols[STANDALONE_TAG_START] || valid_symbols[BLOCK_TAG_START] ||
        valid_symbols[PAIR_OPEN_START] || valid_symbols[PAIR_BLOCK_START] ||
-       valid_symbols[PAIR_CLOSE_START] || valid_symbols[PAIR_STRAY_CLOSE]) &&
+       valid_symbols[PAIR_CLOSE_START] || valid_symbols[PAIR_STRAY_CLOSE] ||
+       valid_symbols[PAIR_IMPLICIT_CLOSE]) &&
       check_closure(lexer, true, false) &&
       !container_end_pending(scanner, lexer, valid_symbols, indent_length,
                              skipped)) {
@@ -986,8 +1094,7 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
         indent_length += 8;
       } else if (lexer->lookahead == '\0') {
         // Protect against stack underflow
-        if (valid_symbols[BLOCK_TAG_END] &&
-            scanner->tag_indent_length_stack->len > 0) {
+        if (valid_symbols[BLOCK_TAG_END] && in_block_tag(scanner)) {
           return dedent_block_tag(scanner, lexer);
         }
         if (valid_symbols[LIST_END]) {
@@ -996,8 +1103,7 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
         break; // Escape if neither applies
       } else if (lexer->lookahead == '\n') {
         if (++newlines > 1) {
-          if (valid_symbols[BLOCK_TAG_END] &&
-              scanner->tag_indent_length_stack->len > 0) {
+          if (valid_symbols[BLOCK_TAG_END] && in_block_tag(scanner)) {
             return dedent_block_tag(scanner, lexer);
           }
           if (valid_symbols[LIST_END]) {
@@ -1011,17 +1117,16 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       skip(lexer);
     }
 
-    if (valid_symbols[BLOCK_TAG_END] &&
-        scanner->tag_indent_length_stack->len > 0) {
-      if (indent_length <= VEC_BACK(scanner->tag_indent_length_stack)) {
+    if (valid_symbols[BLOCK_TAG_END] && in_block_tag(scanner)) {
+      if (indent_length <= tag_top(scanner)) {
         return dedent_block_tag(scanner, lexer);
       }
     }
 
-    if (indent_length < VEC_BACK(scanner->indent_length_stack)) {
+    if (indent_length < indent_top(scanner)) {
       return dedent(scanner, lexer);
-    } else if (indent_length == VEC_BACK(scanner->indent_length_stack)) {
-      if ((int16_t)getbullet(lexer, false) == VEC_BACK(scanner->bullet_stack)) {
+    } else if (indent_length == indent_top(scanner)) {
+      if ((int16_t)getbullet(lexer, false) == bullet_top(scanner)) {
         lexer->result_symbol = LISTITEM_END;
         return true;
       }
@@ -1121,14 +1226,14 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   }
 
   if (is_bullet && newlines == 0) {
-    if (valid_symbols[BULLET]                                      //
-        && indent_length == VEC_BACK(scanner->indent_length_stack) //
+    if (valid_symbols[BULLET]                   //
+        && indent_length == indent_top(scanner) //
     ) {
       lexer->result_symbol = BULLET;
       return true;
 
-    } else if (valid_symbols[LIST_START]                                 //
-               && indent_length > VEC_BACK(scanner->indent_length_stack) //
+    } else if (valid_symbols[LIST_START]              //
+               && indent_length > indent_top(scanner) //
     ) {
       return indent(scanner, lexer, indent_length, ISABULLET);
     }
@@ -1144,6 +1249,15 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     }
 
     if (indent_length == base_indent + 2) {
+      // An unclosed pair cannot run into a heading: close it implicitly
+      // here. The text run that held it is owed its end of line.
+      if (valid_symbols[PAIR_IMPLICIT_CLOSE] && scanner->pair_stack->len > 0 &&
+          at_line_start && scanner->fence_indent_stack->len == 0) {
+        VEC_POP(scanner->pair_stack);
+        scanner->eol_owed = true;
+        lexer->result_symbol = PAIR_IMPLICIT_CLOSE;
+        return true;
+      }
       if (scanner->is_at_section_start && valid_symbols[LIST_END]) {
         scanner->base_indent = base_indent;
         return dedent(scanner, lexer);

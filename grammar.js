@@ -83,6 +83,10 @@ export default grammar({
     // only emits it when the next line does NOT start with a tag closer
     // (`]`, `#]`, `]#`, ...); otherwise it emits _tag_nl so tag_close wins.
     $._tag_value_nl,
+    // Zero-width close of the innermost pair when its closer is missing:
+    // emitted before a closer that matches an OUTER opener (HTML-style
+    // implicit end), before a heading line, and at end of input.
+    $._pair_implicit_close,
   ],
 
 
@@ -150,7 +154,7 @@ export default grammar({
       $.table,
       $.block,
       $.block_tag,
-      $.block_pair_tag,
+      alias($._block_pair_tag, $.pair_tag),
       $.standalone_simple_tag,
     ),
 
@@ -392,33 +396,57 @@ export default grammar({
 
     // ---- Pair tags --------------------------------------------------------
     //
-    //   [ name, v; k=v #]  inline body  [# name ]
+    //   text [ name, v; k=v #] inline body [# name ] more text
     //
-    //   [ name #]          block form: opener ends its line, then a body
-    //   body...
+    //   [ name #]          opener ends its line: same node, entered as an
+    //   body...            element so it can sit between other elements
     //   [# name ]
+    //
+    // The body is INDENTATION-AGNOSTIC: the scanner gives every open pair a
+    // fresh indentation root (see PairEntry floors in scanner.c), so a list,
+    // table, block tag or fenced block inside the body is laid out as if at
+    // column 0, whatever container the opener sits in. Only the opener and
+    // closer lines take part in the surrounding indentation.
     //
     // The scanner keeps a stack of open pair names and only emits
     // _pair_close_start when the closer matches the innermost opener (same
-    // name, bracket and tag token), so the grammar can stay loose here.
-    // Opener closers reuse the exact simple_multi_tag closing tokens
-    // (` #]`, bare `#]` after a _tag_nl), and the closer reuses the
-    // simple_multi_tag start tokens (`[# `), so no new lexical conflicts.
+    // name, bracket and tag token). A closer that matches an outer opener
+    // first implicitly closes the inner ones (_pair_implicit_close), as do a
+    // heading line and the end of input.
 
     pair_tag: $ => seq(
       field('open', $.pair_open),
-      optional(field('body', $.body)),
-      // repeat(choice($._inline_item, $._tag_nl)),
-      field('close', $.pair_close),
+      optional(field('body', alias($._pair_body, $.body))),
+      field('close', $._pair_close_any),
     ),
 
-    block_pair_tag: $ => seq(
+    _block_pair_tag: $ => seq(
       field('open', alias($._pair_block_open, $.pair_open)),
-      $._nl,
-      optional(field('body', $.body)),
-      field('close', $.pair_close),
-      $._eol,
+      optional(field('body', alias($._pair_body, $.body))),
+      field('close', $._pair_close_any),
     ),
+
+    _pair_close_any: $ => choice(
+      $.pair_close,
+      alias($._pair_implicit_close, $.implicit_close),
+    ),
+
+    // Starts mid-line (after the opener) and may end mid-line (before the
+    // closer), with any block content in between.
+    _pair_body: $ => repeat1(choice(
+      alias($._pair_paragraph, $.paragraph),
+      $._nl,
+      $._element,
+    )),
+
+    // Like paragraph, but its last line need not end in a newline (the
+    // closer may follow it on the same line). prec.right: a newline after a
+    // line always belongs to the paragraph, which can still end there.
+    _pair_paragraph: $ => prec.right(seq(
+      $._inline_item,
+      repeat(choice($._inline_item, seq($._nl, $._inline_item))),
+      optional($._nl),
+    )),
 
     pair_open: $ => seq($._pair_open_start, $._pair_open_head),
     _pair_block_open: $ => seq($._pair_block_start, $._pair_open_head),

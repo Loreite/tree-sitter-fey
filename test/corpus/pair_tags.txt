@@ -1,10 +1,42 @@
-============================================================
-Inline pair in a paragraph
-============================================================
+========================================
+01_inline
+========================================
 
-Some [ b #]bold[# b ] text.
+some text [ b #] inline stuff [# b ] more text
 
-------------------------------------------------------------
+----------------------------------------
+
+(document
+  (body
+    (paragraph
+      (expr)
+      (expr)
+      (pair_tag
+        (pair_open
+          (tag_start)
+          (tag_name)
+          (tag_end))
+        (body
+          (paragraph
+            (expr)
+            (expr)))
+        (pair_close
+          (tag_start)
+          (tag_name)
+          (tag_end)))
+      (expr)
+      (expr))))
+
+========================================
+02_mixed
+========================================
+
+intro [ note #] first bit
+| a | b |
+-  item
+[# note ] outro
+
+----------------------------------------
 
 (document
   (body
@@ -15,395 +47,46 @@ Some [ b #]bold[# b ] text.
           (tag_start)
           (tag_name)
           (tag_end))
-        (expr)
+        (body
+          (paragraph
+            (expr)
+            (expr))
+          (table
+            (row
+              (cell
+                (contents
+                  (expr)))
+              (cell
+                (contents
+                  (expr)))))
+          (list
+            (listitem
+              (bullet
+                (segment))
+              (paragraph
+                (expr)))))
         (pair_close
           (tag_start)
           (tag_name)
           (tag_end)))
       (expr))))
 
-============================================================
-Inline pair at line start
-============================================================
-
-[ b #]bold[# b ] then text
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end)))
-      (expr)
-      (expr))))
-
-============================================================
-Nested inline pairs
-============================================================
-
-[ b #][ i #]x[# i ][# b ]
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (pair_tag
-          (pair_open
-            (tag_start)
-            (tag_name)
-            (tag_end))
-          (expr)
-          (pair_close
-            (tag_start)
-            (tag_name)
-            (tag_end)))
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end))))))
-
-============================================================
-Mismatched closer is a stray_close
-============================================================
-
-[ b #]x[# i ] y[# b ]
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (expr)
-        (stray_close)
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end))))))
-
-============================================================
-Stray closer in plain text
-============================================================
-
-text [# b ] more
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (expr)
-      (stray_close)
-      (expr))))
-
-============================================================
-Different brackets do not match
-============================================================
-
-{ b #}x[# b ] y{# b }
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (expr)
-        (stray_close)
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end))))))
-
-============================================================
-Different tag token does not match
-============================================================
-
-[ b #]x[* b ] y[# b ]
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (expr)
-        (stray_close)
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end))))))
-
-============================================================
-Case-folded names match
-============================================================
-
-[ B #]x[# b ] [ DiV #]y[# dIv ]
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end)))
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end))))))
-
-============================================================
-Custom names
-============================================================
-
-[ my-widget #]x[# my-widget ] [ foo_bar #]y[# foo_bar ]
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end)))
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end))))))
-
-============================================================
-Long custom name
-============================================================
-
-[ a_very_long_custom_element_name_over_31 #]x[# a_very_long_custom_element_name_over_31 ]
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end))))))
-
-============================================================
-Values on the opener
-============================================================
-
-[ a, href="x"; k=v #]link[# a ]
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (value)
-          (value
-            (key)
-            (value))
-          (tag_end))
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end))))))
-
-============================================================
-All bracket types and other tokens
-============================================================
-
-( span @)a(@ span ) { em $}b{$ em } < q ~>c<~ q >
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end)))
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end)))
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end))))))
-
-============================================================
-Multi-line opener head
-============================================================
-
-[ a,
-  x #]y[# a ]
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (value)
-          (tag_end))
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end))))))
-
-============================================================
-Inline pair spanning lines
-============================================================
-
-start [ b #]one
-two[# b ] end
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (expr)
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (expr)
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end)))
-      (expr))))
-
-============================================================
-Empty pair
-============================================================
-
-x [ br #][# br ] y
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (expr)
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end)))
-      (expr))))
-
-============================================================
-Block pair with paragraph body
-============================================================
+========================================
+03_block
+========================================
 
 [ div #]
-Inside the div.
+para one
+still one
+
+para two
 [# div ]
 
-------------------------------------------------------------
+----------------------------------------
 
 (document
   (body
-    (block_pair_tag
+    (pair_tag
       (pair_open
         (tag_start)
         (tag_name)
@@ -412,97 +95,148 @@ Inside the div.
         (paragraph
           (expr)
           (expr)
+          (expr)
+          (expr))
+        (paragraph
+          (expr)
           (expr)))
       (pair_close
         (tag_start)
         (tag_name)
         (tag_end)))))
 
-============================================================
-Block pair with table body
-============================================================
+========================================
+04_nested_inline
+========================================
 
-[ div, card #]
-| a | b |
-| c | d |
-[# div ]
+a [ x #] b [ y #] c [# y ] d [# x ] e
 
-------------------------------------------------------------
+----------------------------------------
 
 (document
   (body
-    (block_pair_tag
-      (pair_open
-        (tag_start)
-        (tag_name)
-        (value)
-        (tag_end))
-      (body
-        (table
-          (row
-            (cell
-              (contents
-                (expr)))
-            (cell
-              (contents
-                (expr))))
-          (row
-            (cell
-              (contents
-                (expr)))
-            (cell
-              (contents
-                (expr))))))
-      (pair_close
-        (tag_start)
-        (tag_name)
-        (tag_end)))))
+    (paragraph
+      (expr)
+      (pair_tag
+        (pair_open
+          (tag_start)
+          (tag_name)
+          (tag_end))
+        (body
+          (paragraph
+            (expr)
+            (pair_tag
+              (pair_open
+                (tag_start)
+                (tag_name)
+                (tag_end))
+              (body
+                (paragraph
+                  (expr)))
+              (pair_close
+                (tag_start)
+                (tag_name)
+                (tag_end)))
+            (expr)))
+        (pair_close
+          (tag_start)
+          (tag_name)
+          (tag_end)))
+      (expr))))
 
-============================================================
-Nested block pairs
-============================================================
+========================================
+05_block_tail
+========================================
 
-[ section #]
 [ div #]
-text
-[# div ]
-[# section ]
+body line [# div ] after
 
-------------------------------------------------------------
+----------------------------------------
 
 (document
   (body
-    (block_pair_tag
+    (pair_tag
       (pair_open
         (tag_start)
         (tag_name)
         (tag_end))
       (body
-        (block_pair_tag
-          (pair_open
-            (tag_start)
-            (tag_name)
-            (tag_end))
-          (body
-            (paragraph
-              (expr)))
-          (pair_close
-            (tag_start)
-            (tag_name)
-            (tag_end))))
+        (paragraph
+          (expr)
+          (expr)))
       (pair_close
         (tag_start)
         (tag_name)
-        (tag_end)))))
+        (tag_end)))
+    (paragraph
+      (expr))))
 
-============================================================
-Pair inside a list item
-============================================================
+========================================
+06_portal_list
+========================================
 
-1.  item [ b #]x[# b ]
-2.  other
+-  item one [ note #]
+-  inner list at col 0
+-  second
+[# note ] tail
+-  item two
 
-------------------------------------------------------------
+----------------------------------------
+
+(document
+  (body
+    (list
+      (listitem
+        (bullet
+          (segment))
+        (paragraph
+          (expr)
+          (expr)
+          (pair_tag
+            (pair_open
+              (tag_start)
+              (tag_name)
+              (tag_end))
+            (body
+              (list
+                (listitem
+                  (bullet
+                    (segment))
+                  (paragraph
+                    (expr)
+                    (expr)
+                    (expr)
+                    (expr)
+                    (expr)))
+                (listitem
+                  (bullet
+                    (segment))
+                  (paragraph
+                    (expr)))))
+            (pair_close
+              (tag_start)
+              (tag_name)
+              (tag_end)))
+          (expr)))
+      (listitem
+        (bullet
+          (segment))
+        (paragraph
+          (expr)
+          (expr))))))
+
+========================================
+07_portal_fence
+========================================
+
+-  item [ code #]
+```  js
+let x = 1
+```
+[# code ]
+-  next
+
+----------------------------------------
 
 (document
   (body
@@ -517,7 +251,16 @@ Pair inside a list item
               (tag_start)
               (tag_name)
               (tag_end))
-            (expr)
+            (body
+              (block
+                (fence)
+                (expr)
+                (contents
+                  (expr)
+                  (expr)
+                  (expr)
+                  (expr))
+                (fence)))
             (pair_close
               (tag_start)
               (tag_name)
@@ -528,16 +271,165 @@ Pair inside a list item
         (paragraph
           (expr))))))
 
-============================================================
-Block pair inside a list item
-============================================================
+========================================
+08_portal_btag
+========================================
 
-1.  [ div #]
-    inner
-    [# div ]
-2.  other
+[ box ]#
+  inside [ p #]
+[ inner ]#
+  deep
+back at zero
+[# p ] done
+  still box
+after box
 
-------------------------------------------------------------
+----------------------------------------
+
+(document
+  (body
+    (block_tag
+      (tag_start)
+      (tag_name)
+      (tag_end)
+      (body
+        (paragraph
+          (expr)
+          (pair_tag
+            (pair_open
+              (tag_start)
+              (tag_name)
+              (tag_end))
+            (body
+              (block_tag
+                (tag_start)
+                (tag_name)
+                (tag_end)
+                (body
+                  (paragraph
+                    (expr))))
+              (paragraph
+                (expr)
+                (expr)
+                (expr)))
+            (pair_close
+              (tag_start)
+              (tag_name)
+              (tag_end)))
+          (expr)
+          (expr)
+          (expr))))
+    (paragraph
+      (expr)
+      (expr))))
+
+========================================
+09_outer_closer
+========================================
+
+a [ x #] b [ y #] c [# x ] d
+
+----------------------------------------
+
+(document
+  (body
+    (paragraph
+      (expr)
+      (pair_tag
+        (pair_open
+          (tag_start)
+          (tag_name)
+          (tag_end))
+        (body
+          (paragraph
+            (expr)
+            (pair_tag
+              (pair_open
+                (tag_start)
+                (tag_name)
+                (tag_end))
+              (body
+                (paragraph
+                  (expr)))
+              (implicit_close))))
+        (pair_close
+          (tag_start)
+          (tag_name)
+          (tag_end)))
+      (expr))))
+
+========================================
+10_eof
+========================================
+
+text [ x #] never closed
+more
+
+----------------------------------------
+
+(document
+  (body
+    (paragraph
+      (expr)
+      (pair_tag
+        (pair_open
+          (tag_start)
+          (tag_name)
+          (tag_end))
+        (body
+          (paragraph
+            (expr)
+            (expr)
+            (expr)))
+        (implicit_close)))))
+
+========================================
+11_heading
+========================================
+
+text [ x #] never closed
+more
+  1. Heading
+sec body
+
+----------------------------------------
+
+(document
+  (body
+    (paragraph
+      (expr)
+      (pair_tag
+        (pair_open
+          (tag_start)
+          (tag_name)
+          (tag_end))
+        (body
+          (paragraph
+            (expr)
+            (expr)
+            (expr)))
+        (implicit_close))))
+  (section
+    (heading
+      (signature
+        (segment))
+      (title
+        (expr)))
+    (body
+      (paragraph
+        (expr)
+        (expr)))))
+
+========================================
+12_heading_list
+========================================
+
+-  item [ x #] open
+body
+  1. Heading
+sec
+
+----------------------------------------
 
 (document
   (body
@@ -545,14 +437,142 @@ Block pair inside a list item
       (listitem
         (bullet
           (segment))
-        (block_pair_tag
+        (paragraph
+          (expr)
+          (pair_tag
+            (pair_open
+              (tag_start)
+              (tag_name)
+              (tag_end))
+            (body
+              (paragraph
+                (expr)
+                (expr)))
+            (implicit_close))
+          (expr)
+          (expr))))
+    (paragraph
+      (expr))))
+
+========================================
+13_stray
+========================================
+
+text [# zz ] more
+
+----------------------------------------
+
+(document
+  (body
+    (paragraph
+      (expr)
+      (stray_close)
+      (expr))))
+
+========================================
+14_block_nested
+========================================
+
+[ outer #]
+[ inner #]
+-  li
+[# inner ]
+after inner
+[# outer ]
+
+----------------------------------------
+
+(document
+  (body
+    (pair_tag
+      (pair_open
+        (tag_start)
+        (tag_name)
+        (tag_end))
+      (body
+        (pair_tag
+          (pair_open
+            (tag_start)
+            (tag_name)
+            (tag_end))
+          (body
+            (list
+              (listitem
+                (bullet
+                  (segment))
+                (paragraph
+                  (expr)))))
+          (pair_close
+            (tag_start)
+            (tag_name)
+            (tag_end)))
+        (paragraph
+          (expr)
+          (expr)))
+      (pair_close
+        (tag_start)
+        (tag_name)
+        (tag_end)))))
+
+========================================
+15_empty
+========================================
+
+a [ x #][# x ] b
+
+----------------------------------------
+
+(document
+  (body
+    (paragraph
+      (expr)
+      (pair_tag
+        (pair_open
+          (tag_start)
+          (tag_name)
+          (tag_end))
+        (pair_close
+          (tag_start)
+          (tag_name)
+          (tag_end)))
+      (expr))))
+
+========================================
+16_in_listitem_block
+========================================
+
+-  [ div #]
+zero indent body
+-  list in body
+[# div ]
+-  sibling
+
+----------------------------------------
+
+(document
+  (body
+    (list
+      (listitem
+        (bullet
+          (segment))
+        (pair_tag
           (pair_open
             (tag_start)
             (tag_name)
             (tag_end))
           (body
             (paragraph
-              (expr)))
+              (expr)
+              (expr)
+              (expr))
+            (list
+              (listitem
+                (bullet
+                  (segment))
+                (paragraph
+                  (expr)
+                  (expr)
+                  (expr)))))
           (pair_close
             (tag_start)
             (tag_name)
@@ -563,79 +583,18 @@ Block pair inside a list item
         (paragraph
           (expr))))))
 
-============================================================
-Pair inside a line tag body
-============================================================
+========================================
+17_section
+========================================
 
-#[ q ]  see [ b *]x[* b ] end#
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (line_tag
-        (tag_start)
-        (tag_name)
-        (tag_end)
-        (body
-          (pair_tag
-            (pair_open
-              (tag_start)
-              (tag_name)
-              (tag_end))
-            (expr)
-            (pair_close
-              (tag_start)
-              (tag_name)
-              (tag_end))))
-        (body_end)))))
-
-============================================================
-Pair next to simple and standalone tags
-============================================================
-
-[# s #] [ b #]x[# b ] [# t, v #]
-[# alone #]
-
-------------------------------------------------------------
-
-(document
-  (body
-    (paragraph
-      (simple_tag
-        (tag_start)
-        (tag_name)
-        (tag_end))
-      (pair_tag
-        (pair_open
-          (tag_start)
-          (tag_name)
-          (tag_end))
-        (expr)
-        (pair_close
-          (tag_start)
-          (tag_name)
-          (tag_end)))
-      (simple_tag
-        (tag_start)
-        (tag_name)
-        (value)
-        (tag_end)))
-    (standalone_simple_tag
-      (simple_tag
-        (tag_start)
-        (tag_name)
-        (tag_end)))))
-
-============================================================
-Pair inside a heading title
-============================================================
-
-  1. Title [ em #]x[# em ]
+  1. Head
+-  li [ n #] x
+y
+[# n ] z
+  2. Next
 body
 
-------------------------------------------------------------
+----------------------------------------
 
 (document
   (body)
@@ -644,53 +603,123 @@ body
       (signature
         (segment))
       (title
-        (expr)
-        (pair_tag
-          (pair_open
-            (tag_start)
-            (tag_name)
-            (tag_end))
-          (expr)
-          (pair_close
-            (tag_start)
-            (tag_name)
-            (tag_end)))))
+        (expr)))
+    (body
+      (list
+        (listitem
+          (bullet
+            (segment))
+          (paragraph
+            (expr)
+            (pair_tag
+              (pair_open
+                (tag_start)
+                (tag_name)
+                (tag_end))
+              (body
+                (paragraph
+                  (expr)
+                  (expr)))
+              (pair_close
+                (tag_start)
+                (tag_name)
+                (tag_end)))
+            (expr))))))
+  (section
+    (heading
+      (signature
+        (segment))
+      (title
+        (expr)))
     (body
       (paragraph
         (expr)))))
 
-============================================================
-Brackets that are not tags
-============================================================
+========================================
+18_nested_heading
+========================================
 
-[foo] [ foo ] [ foo bar ] [ 1 #] [foo#]
+a [ x #] b [ y #] c
+  1. Heading
+sec
 
-------------------------------------------------------------
+----------------------------------------
 
 (document
   (body
     (paragraph
       (expr)
-      (expr)
-      (expr)
-      (expr)
-      (expr)
-      (expr)
-      (expr)
-      (expr)
-      (expr)
-      (expr)
-      (expr)
-      (expr))))
+      (pair_tag
+        (pair_open
+          (tag_start)
+          (tag_name)
+          (tag_end))
+        (body
+          (paragraph
+            (expr)
+            (pair_tag
+              (pair_open
+                (tag_start)
+                (tag_name)
+                (tag_end))
+              (body
+                (paragraph
+                  (expr)))
+              (implicit_close))))
+        (implicit_close))))
+  (section
+    (heading
+      (signature
+        (segment))
+      (title
+        (expr)))
+    (body
+      (paragraph
+        (expr)))))
 
-============================================================
-Block tag is not a pair
-============================================================
+========================================
+19_block_heading
+========================================
 
-[ note ]#  head
-  body
+[ div #]
+unclosed body
+  1. Heading
+sec
 
-------------------------------------------------------------
+----------------------------------------
+
+(document
+  (body
+    (pair_tag
+      (pair_open
+        (tag_start)
+        (tag_name)
+        (tag_end))
+      (body
+        (paragraph
+          (expr)
+          (expr)))
+      (implicit_close)))
+  (section
+    (heading
+      (signature
+        (segment))
+      (title
+        (expr)))
+    (body
+      (paragraph
+        (expr)))))
+
+========================================
+20_btag_heading
+========================================
+
+[ box ]#
+  in [ p #] open
+  1. Heading
+sec
+
+----------------------------------------
 
 (document
   (body
@@ -701,29 +730,52 @@ Block tag is not a pair
       (body
         (paragraph
           (expr)
-          (expr))))))
+          (pair_tag
+            (pair_open
+              (tag_start)
+              (tag_name)
+              (tag_end))
+            (body
+              (paragraph
+                (expr)))
+            (implicit_close))
+          (expr)
+          (expr))))
+    (paragraph
+      (expr))))
 
-============================================================
-Block tag after a list item
-============================================================
+========================================
+21_fence_in_pair_heading
+========================================
 
-1.  item
-[ note ]#  after
+a [ x #]
+```
+  1. not a heading
+```
+[# x ] b
 
-------------------------------------------------------------
+----------------------------------------
 
 (document
   (body
-    (list
-      (listitem
-        (bullet
-          (segment))
-        (paragraph
-          (expr))))
-    (block_tag
-      (tag_start)
-      (tag_name)
-      (tag_end)
-      (body
-        (paragraph
-          (expr))))))
+    (paragraph
+      (expr)
+      (pair_tag
+        (pair_open
+          (tag_start)
+          (tag_name)
+          (tag_end))
+        (body
+          (block
+            (fence)
+            (contents
+              (expr)
+              (expr)
+              (expr)
+              (expr))
+            (fence)))
+        (pair_close
+          (tag_start)
+          (tag_name)
+          (tag_end)))
+      (expr))))
