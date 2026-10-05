@@ -87,6 +87,9 @@ export default grammar({
     // emitted before a closer that matches an OUTER opener (HTML-style
     // implicit end), before a heading line, and at end of input.
     $._pair_implicit_close,
+    // Zero-width: "the line ends here" (next char is \r, \n or EOF).
+    // Ends a line_tag without stealing the newline from its paragraph.
+    $._line_tag_eol,
   ],
 
 
@@ -359,9 +362,15 @@ export default grammar({
     ...Object.fromEntries(tagTokens.flatMap((tok, ti) => [
       [`_line_tag_body_${ti}`, $ => line_tag_body(tok, $)],
       [`_line_tag_tail_${ti}`, $ => seq(
-        optional(seq(/[ \t]{2,}/, alias($[`_line_tag_body_${ti}`], $.body))),
+        // One blank separates head from body. The separator may also be
+        // followed directly by the terminator (`#[ b ] #`): the lexer commits
+        // to the separator before it can see that no body follows.
+        optional(seq(
+          /[ \t]+/,
+          optional(alias($[`_line_tag_body_${ti}`], $.body)),
+        )),
         choice(
-          $._eol,
+          $._line_tag_eol,
           field('tag_closure', alias(nim(tok), $.body_end)),
         ),
       )],
@@ -374,7 +383,7 @@ export default grammar({
       choice(
         $._eol,
         seq($._nl, field('body', $.body)),
-        seq(/[ \t]{2,}/, field('body', $.body)),
+        seq(/[ \t]+/, field('body', $.body)),
       ),
       $._block_tag_end,
     ),

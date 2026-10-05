@@ -68,6 +68,7 @@ enum TokenType {
   PAIR_STRAY_CLOSE,
   TAG_VALUE_NL,
   PAIR_IMPLICIT_CLOSE,
+  LINE_TAG_EOL,
 };
 
 typedef enum {
@@ -135,8 +136,6 @@ typedef struct {
   stack *bullet_stack;
   stack *section_stack;
 
-  // stack *tag_bracket_stack;
-  // stack *tag_token_stack;
   stack *tag_indent_length_stack;
 
   stack *fence_indent_stack;
@@ -955,6 +954,27 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     lexer->mark_end(lexer);
     lexer->result_symbol = ENDOFFILE; // zero-width _eol for the text run
     return true;
+  }
+
+  // End of a line_tag that has no explicit terminator: succeed only when the
+  // rest of the line is blank. Zero-width, so the newline (or EOF) is left
+  // for the enclosing paragraph / title / body's own _eol.
+  //
+  // This is only ever valid mid-line (after a tag_end or a body word), so
+  // skipping the trailing blanks here cannot disturb the line-start logic
+  // below. `skipped` is still kept in step so get_column() == skipped stays
+  // meaningful if we fall through.
+  if (valid_symbols[LINE_TAG_EOL]) {
+    while (istabspace(lexer)) {
+      skip(lexer);
+      skipped++;
+    }
+    if (check_eol(lexer)) {   // '\n', '\r', '\0' or EOF
+      lexer->mark_end(lexer); // token ends here: nothing consumed
+      lexer->result_symbol = LINE_TAG_EOL;
+      return true;
+    }
+    // Not at end of line: fall through to the normal scan.
   }
 
   // Handle explicit tag newlines with active list-indent checks.
