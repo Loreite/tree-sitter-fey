@@ -69,6 +69,9 @@ enum TokenType {
   TAG_VALUE_NL,
   PAIR_IMPLICIT_CLOSE,
   LINE_TAG_EOL,
+  LINE_TAG_START,
+  SCOPE_TAG_START,
+  SCOPE_LINE_TAG_START,
 };
 
 typedef enum {
@@ -578,6 +581,10 @@ static bool check_closure(TSLexer *lexer, bool open, bool close) {
                     lexer->lookahead == '}' || lexer->lookahead == '>'));
 }
 
+static bool check_open_bracket(int32_t c) {
+  return c == '[' || c == '(' || c == '{' || c == '<';
+}
+
 static bool compare_closure(int32_t open, int32_t close) {
   return (open == '[' && close == ']') || (open == '(' && close == ')') ||
          (open == '{' && close == '}') || (open == '<' && close == '>');
@@ -841,36 +848,114 @@ static bool scan_token_tag(Scanner *scanner, TSLexer *lexer,
     }
   }
 
-  if (!valid_symbols[STANDALONE_TAG_START])
+  if (!(valid_symbols[STANDALONE_TAG_START] || valid_symbols[SCOPE_TAG_START] ||
+        valid_symbols[SCOPE_LINE_TAG_START]))
     return false;
 
-  // `[# name ... #]` + EOL: find "<ws><sigil><close>" followed by end of line
+  // `[# name ... #]`: the grammar's closer token is sigil- and
+  // bracket-agnostic, so the FIRST "<ws><sigil><close>" ends the head. It
+  // must repeat the opener's sigil and match its bracket, or no gate is
+  // emitted and the text stays plain text.
+  bool crossed_nl = false;
   int budget = PAIR_LOOKAHEAD_CAP * 4;
   while (budget-- > 0) {
     int32_t c = lexer->lookahead;
     if (c == '\0' || lexer->eof(lexer))
       return false;
 
-    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+    if (c == '\n' || c == '\r') {
+      crossed_nl = true;
+      prev_space = true;
+      advance(lexer);
+      continue;
+    }
+    if (c == ' ' || c == '\t') {
       prev_space = true;
       advance(lexer);
       continue;
     }
 
-    if (prev_space && c == tag_token) {
+    if (prev_space && token_index(c) >= 0) {
       advance(lexer);
-      if (compare_closure(open, lexer->lookahead)) {
-        advance(lexer);
-        if (!check_eol(lexer))
+      if (check_closure(lexer, false, true)) {
+        if (c != tag_token || !compare_closure(open, lexer->lookahead))
           return false;
-        lexer->result_symbol = STANDALONE_TAG_START;
-        return true;
+        advance(lexer);
+        if (valid_symbols[STANDALONE_TAG_START] && check_eol(lexer)) {
+          lexer->result_symbol = STANDALONE_TAG_START;
+          return true;
+        }
+        if (valid_symbols[SCOPE_TAG_START]) {
+          lexer->result_symbol = SCOPE_TAG_START;
+          return true;
+        }
+        if (valid_symbols[SCOPE_LINE_TAG_START] && !crossed_nl) {
+          lexer->result_symbol = SCOPE_LINE_TAG_START;
+          return true;
+        }
+        return false;
       }
       prev_space = false;
       continue;
     }
 
     prev_space = false;
+    advance(lexer);
+  }
+  return false;
+}
+
+// Called with the lexer just past `<sigil><open><ws>` of a line tag. Accepts
+// the same head shape the grammar does (name, then `,`/`;` values, possibly
+// over several lines) and reports whether its closer matches `open`. A value
+// word may not start with a close bracket, so the first <ws><close> ends it.
+static bool scan_line_tag_head(TSLexer *lexer, int32_t open) {
+  int budget = PAIR_LOOKAHEAD_CAP;
+
+  while (true) {
+    if (istabspace(lexer)) {
+      advance(lexer);
+      budget--;
+    } else if (check_nl(lexer)) {
+      if (!lookahead_newline(lexer, &budget))
+        return false;
+    } else {
+      break;
+    }
+  }
+
+  if (!is_name_start(lexer->lookahead))
+    return false;
+  while (is_name_char(lexer->lookahead) && budget > 0) {
+    advance(lexer);
+    budget--;
+  }
+
+  bool prev_ws = false;
+  bool in_values = false;
+  while (budget-- > 0) {
+    int32_t c = lexer->lookahead;
+    if (c == '\0' || lexer->eof(lexer))
+      return false;
+    if (c == '\n' || c == '\r') {
+      if (!lookahead_newline(lexer, &budget))
+        return false;
+      prev_ws = true;
+      continue;
+    }
+    if (c == ' ' || c == '\t') {
+      prev_ws = true;
+      advance(lexer);
+      continue;
+    }
+    if (prev_ws && check_closure(lexer, false, true))
+      return compare_closure(open, c);
+    if (!in_values) {
+      if (c != ',' && c != ';')
+        return false; // `#[ foo bar ]` etc.: plain text
+      in_values = true;
+    }
+    prev_ws = false;
     advance(lexer);
   }
   return false;
@@ -908,6 +993,8 @@ static bool scan_bracket(Scanner *scanner, TSLexer *lexer,
 
   if (check_tag_token(lexer)) {
     if (!(valid_symbols[STANDALONE_TAG_START] ||
+          valid_symbols[SCOPE_TAG_START] ||
+          valid_symbols[SCOPE_LINE_TAG_START] ||
           valid_symbols[PAIR_CLOSE_START] || valid_symbols[PAIR_STRAY_CLOSE] ||
           valid_symbols[PAIR_IMPLICIT_CLOSE]))
       return false;
@@ -1097,6 +1184,7 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   // - Tags that start with an open bracket (see scan_bracket)
   int16_t newlines = 0;
   if ((valid_symbols[STANDALONE_TAG_START] || valid_symbols[BLOCK_TAG_START] ||
+       valid_symbols[SCOPE_TAG_START] || valid_symbols[SCOPE_LINE_TAG_START] ||
        valid_symbols[PAIR_OPEN_START] || valid_symbols[PAIR_BLOCK_START] ||
        valid_symbols[PAIR_CLOSE_START] || valid_symbols[PAIR_STRAY_CLOSE] ||
        valid_symbols[PAIR_IMPLICIT_CLOSE]) &&
@@ -1166,6 +1254,17 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   int16_t fence_width = 0;
   bool fenceable = true;
   bool segmentable = true;
+  // Line-tag candidate: the run is exactly `<sigil><open>` (e.g. `#[`).
+  int32_t run_first = lexer->lookahead;
+  int32_t run_open = 0;
+  int run_len = 0;
+  // Mid-line, a line-tag gate sits at its sigil, not before the blanks that
+  // precede it (like the bracket tags in scan_bracket). At a line start the
+  // other zero-width tokens here (bullet, signature, ...) keep their end
+  // before the indentation, so leave mark_end alone there.
+  if (!at_line_start && valid_symbols[LINE_TAG_START] &&
+      token_index(run_first) >= 0)
+    lexer->mark_end(lexer);
 
   while (check_token(lexer) || check_delimiter(lexer) ||
          check_closure(lexer, true, true) //
@@ -1175,7 +1274,9 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
         skip(lexer);
       segmentable = false;
       fenceable = false;
+      run_len = 99;
     } else if (check_delimiter(lexer)) {
+      run_len++;
       segments += 1;
       segmentable = true;
       if (fenceable && lexer->lookahead == fence_char) {
@@ -1185,12 +1286,18 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       }
       skip(lexer);
     } else if (check_closure(lexer, true, true)) {
+      if (run_len == 1)
+        run_open = lexer->lookahead;
+      run_len++;
       segments += 1;
       segmentable = true;
       fenceable = false;
       skip(lexer);
     }
   }
+  bool line_tag_shape = run_len == 2 && token_index(run_first) >= 0 &&
+                        check_open_bracket(run_open);
+  bool ws_after_run = false;
 
   bool fence_looked_ahead = false;
   // Decide "delimiters run straight into the line end" BEFORE the fence
@@ -1240,6 +1347,7 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   if (!delims_hit_eol) {
     bool has_second_space = false;
     if (fence_looked_ahead || istabspace(lexer)) {
+      ws_after_run = true;
       if (!fence_looked_ahead)
         skip(lexer);
       if (istabspace(lexer)) {
@@ -1309,6 +1417,15 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
         return true;
       }
     }
+  }
+
+  // Line tag `<sigil><open><ws>head<ws><close>`. Checked last, reusing the
+  // lookahead above (which already consumed `<sigil><open><ws>`), so a
+  // heading, bullet or fence on the same characters always wins first.
+  if (valid_symbols[LINE_TAG_START] && line_tag_shape && ws_after_run &&
+      newlines == 0 && scan_line_tag_head(lexer, run_open)) {
+    lexer->result_symbol = LINE_TAG_START; // zero-width (mark_end above)
+    return true;
   }
 
   return false;

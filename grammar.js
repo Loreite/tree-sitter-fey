@@ -90,6 +90,13 @@ export default grammar({
     // Zero-width: "the line ends here" (next char is \r, \n or EOF).
     // Ends a line_tag without stealing the newline from its paragraph.
     $._line_tag_eol,
+    // Zero-width gates. The tag rules below are bracket-agnostic (and the
+    // scope tags sigil-agnostic too) to keep the parse table small; these
+    // gates are only emitted after the scanner has checked that the closer
+    // matches the opener, so a mismatched tag never starts.
+    $._line_tag_start,        // `#[ name ... ]`   closer bracket matches
+    $._scope_tag_start,       // `[# name ... #]`  closer sigil + bracket match
+    $._scope_line_tag_start,  // same, closer on the same line (table cells)
   ],
 
 
@@ -327,28 +334,25 @@ export default grammar({
       repeat(seq($._expr_line, repeat1($._nl))),
     ),
 
-    // 76 thin alternatives (sigil x bracket). The expensive pieces are shared
-    // hidden rules: the head + bracket closer is one rule per BRACKET (4), the
-    // body + terminator one rule per SIGIL (19). Sharing the head across
-    // sigils keeps bracket matching strict while cutting the parse table by
-    // ~15k actions (the old inline head was duplicated per sigil).
+    // One alternative per SIGIL (19): the body and terminator depend on it.
+    // The bracket is agnostic: one shared head whose closer is any close
+    // bracket. _line_tag_start is only emitted when the closer matches the
+    // opening bracket (scanner.c, scan_line_tag_head).
     line_tag: $ => choice(
-      ...tagTokens.flatMap((tok, ti) =>
-        tagBrackets.map(([open, close], bi) => seq(
-          field('tag_closure', alias(
-            token(seq(sp_nim(tok), imm(open), imm(reWs))), $.tag_start)
-          ),
-          $[`_line_tag_head_${bi}`],
-          $[`_line_tag_tail_${ti}`],
-        )),
-      )
+      ...tagTokens.map((tok, ti) => seq(
+        $._line_tag_start,
+        field('tag_closure', alias(
+          token(seq(sp_nim(tok), imm(reTagOpenBracket), imm(reWs))), $.tag_start)
+        ),
+        $._line_tag_head,
+        $[`_line_tag_tail_${ti}`],
+      )),
     ),
 
-    // one per bracket: name/values + the bracket-matching closer
-    ...Object.fromEntries(tagBrackets.map(([open, close], bi) => [
-      `_line_tag_head_${bi}`,
-      $ => seq($._tag_head, tag_close($, ws_end(close), bare_end(close))),
-    ])),
+    _line_tag_head: $ => seq(
+      $._tag_head,
+      tag_close($, ws_end(reTagCloseBracket), bare_end(reTagCloseBracket)),
+    ),
 
     // Shared by line_tag, scope_multi_tag and pair_open.
     _tag_head: $ => seq(
@@ -388,19 +392,20 @@ export default grammar({
       $._block_tag_end,
     ),
 
-    _block_tag_open: $ => choice(
-      ...tagBrackets.map(([open, close]) => seq(
-        field('tag_closure', alias(token.immediate(prec('special', seq(open, reWs))), $.tag_start)),
-        repeat($._tag_nl),
-        field('name', alias(nim(reTagName), $.tag_name)),
-        repeat($._tag_multi_value_choice),
-        optional(alias(choice(nim(','), nim(';')), 'tag_delimiter')),
-        tag_close(
-          $,
-          ws_end(close, reTagToken),
-          bare_end(close, reTagToken),
-        ),
-      ))
+    // Bracket-agnostic: _block_tag_start is only emitted after the scanner
+    // has checked that the closer matches the opener (scan_open_shape).
+    _block_tag_open: $ => seq(
+      field('tag_closure', alias(
+        token.immediate(prec('special', seq(reTagOpenBracket, reWs))), $.tag_start)),
+      repeat($._tag_nl),
+      field('name', alias(nim(reTagName), $.tag_name)),
+      repeat($._tag_multi_value_choice),
+      optional(alias(choice(nim(','), nim(';')), 'tag_delimiter')),
+      tag_close(
+        $,
+        ws_end(reTagCloseBracket, reTagToken),
+        bare_end(reTagCloseBracket, reTagToken),
+      ),
     ),
 
     // ---- Pair tags --------------------------------------------------------
@@ -476,8 +481,7 @@ export default grammar({
 
     pair_close: $ => seq(
       $._pair_close_start,
-      field('tag_closure', alias(
-        token(prec('special', seq(reTagOpenBracket, reTagToken, reWs))), $.tag_start)),
+      field('tag_closure', alias(scope_tag_start(), $.tag_start)),
       field('name', alias(nim(reTagName), $.tag_name)),
       field('tag_closure', alias(ws_end(reTagCloseBracket), $.tag_end)),
     ),
@@ -486,28 +490,28 @@ export default grammar({
 
     _standalone_scope_tag: $ => seq(
       $._standalone_tag_start,
-      alias($.scope_multi_tag, $.scope_tag),
+      alias($._scope_tag_inner, $.scope_tag),
       $._eol,
     ),
 
-    scope_multi_tag: $ => choice(
-      ...tagBrackets.flatMap(([open, close]) =>
-        tagTokens.map(tok => seq(
-          field('tag_closure', alias(token(seq(nim(open), imm(tok), imm(reWs))), $.tag_start)),
-          $._tag_head,
-          tag_close($, ws_end(tok, close), bare_end(tok, close)),
-        ))
-      )
+    // Sigil- and bracket-agnostic, like _pair_open_head: spelling out the 76
+    // combinations cost ~20k parse actions. The scanner checks that the
+    // closer's sigil and bracket match the opener before it emits
+    // _scope_tag_start / _standalone_tag_start / _scope_line_tag_start.
+    scope_multi_tag: $ => seq($._scope_tag_start, $._scope_tag_inner),
+
+    _scope_tag_inner: $ => seq(
+      field('tag_closure', alias(scope_tag_start(), $.tag_start)),
+      $._tag_head,
+      tag_close($, ws_end(reTagToken, reTagCloseBracket),
+                bare_end(reTagToken, reTagCloseBracket)),
     ),
 
-    scope_line_tag: $ => choice(
-      ...tagBrackets.flatMap(([open, close]) =>
-        tagTokens.map(tok => seq(
-          field('tag_closure', alias(token(seq(nim(open), imm(tok), imm(reWs))), $.tag_start)),
-          $._tag_line_head,
-          field('tag_closure', alias(ws_end(tok, close), $.tag_end))
-        ))
-      )
+    scope_line_tag: $ => seq(
+      $._scope_line_tag_start,
+      field('tag_closure', alias(scope_tag_start(), $.tag_start)),
+      $._tag_line_head,
+      field('tag_closure', alias(ws_end(reTagToken, reTagCloseBracket), $.tag_end)),
     ),
 
     // Single-line counterpart of _tag_head, shared by every scope_line_tag.
@@ -632,6 +636,11 @@ function bare_end(...parts) {
 // Closer token that must be preceded by at least one space/tab.
 function ws_end(...parts) {
   return token.immediate(prec('special', seq(reWsPlus, ...parts)));
+}
+
+// `[# ` opener shared by scope tags and pair closers (one lexer token).
+function scope_tag_start() {
+  return token(prec('special', seq(reTagOpenBracket, reTagToken, reWs)));
 }
 
 function line_tag_body(skip, $) {
