@@ -1,0 +1,381 @@
+================================================================================
+list item text is not a nested list
+================================================================================
+
+  I. Head
+
+-  Now:  what is broken
+   continued
+-  Where:  other
+
+--------------------------------------------------------------------------------
+
+(document
+  (body)
+  (section
+    (heading
+      (signature
+        (segment))
+      (title
+        (expr)))
+    (body
+      (list
+        (listitem
+          (bullet
+            (segment))
+          (paragraph
+            (expr)
+            (expr)
+            (expr)
+            (expr)
+            (expr)))
+        (listitem
+          (bullet
+            (segment))
+          (paragraph
+            (expr)
+            (expr)))))))
+
+================================================================================
+block under a list item after a blank line
+================================================================================
+
+  I. Head
+
+-  Fey:  tag
+
+    ###  src fey
+    {@ date, x @}
+    ###
+
+   more text
+-  Last:  x
+
+--------------------------------------------------------------------------------
+
+(document
+  (body)
+  (section
+    (heading
+      (signature
+        (segment))
+      (title
+        (expr)))
+    (body
+      (list
+        (listitem
+          (bullet
+            (segment))
+          (paragraph
+            (expr)
+            (expr))
+          (block
+            (fence)
+            (expr)
+            (expr)
+            (contents
+              (expr)
+              (expr)
+              (expr)
+              (expr))
+            (fence))
+          (paragraph
+            (expr)
+            (expr)))
+        (listitem
+          (bullet
+            (segment))
+          (paragraph
+            (expr)
+            (expr)))))))
+
+================================================================================
+fence on the bullet line
+================================================================================
+
+  I. Head
+
+-  ###  src lua
+   code line
+###
+-  next:  y
+
+--------------------------------------------------------------------------------
+
+(document
+  (body)
+  (section
+    (heading
+      (signature
+        (segment))
+      (title
+        (expr)))
+    (body
+      (list
+        (listitem
+          (bullet
+            (segment))
+          (block
+            (fence)
+            (expr)
+            (expr)
+            (contents
+              (expr)
+              (expr))
+            (fence)))
+        (listitem
+          (bullet
+            (segment))
+          (paragraph
+            (expr)
+            (expr)))))))
+
+================================================================================
+block tag on the bullet line
+================================================================================
+
+  I. Head
+
+-  [ note ]#  body
+   more body
+-  next:  y
+
+--------------------------------------------------------------------------------
+
+(document
+  (body)
+  (section
+    (heading
+      (signature
+        (segment))
+      (title
+        (expr)))
+    (body
+      (list
+        (listitem
+          (bullet
+            (segment))
+          (block_tag
+            (tag_start)
+            (tag_name)
+            (tag_end)
+            (body
+              (paragraph
+                (expr)
+                (expr)
+                (expr)))))
+        (listitem
+          (bullet
+            (segment))
+          (paragraph
+            (expr)
+            (expr)))))))
+
+================================================================================
+sublist on the following lines
+================================================================================
+
+  I. Head
+
+-  Fey:  head
+   -  nested:  x
+   -  nested2:  y
+-  Last:  z
+
+--------------------------------------------------------------------------------
+
+(document
+  (body)
+  (section
+    (heading
+      (signature
+        (segment))
+      (title
+        (expr)))
+    (body
+      (list
+        (listitem
+          (bullet
+            (segment))
+          (paragraph
+            (expr)
+            (expr))
+          (list
+            (listitem
+              (bullet
+                (segment))
+              (paragraph
+                (expr)
+                (expr)))
+            (listitem
+              (bullet
+                (segment))
+              (paragraph
+                (expr)
+                (expr)))))
+        (listitem
+          (bullet
+            (segment))
+          (paragraph
+            (expr)
+            (expr)))))))
+
+================================================================================
+fence inside a nested list item
+================================================================================
+
+  I. Head
+
+-  Fey:  tag
+   -  inner:  x
+
+       ###
+       code
+       ###
+
+   -  inner2:  y
+-  Last:  x
+
+--------------------------------------------------------------------------------
+
+(document
+  (body)
+  (section
+    (heading
+      (signature
+        (segment))
+      (title
+        (expr)))
+    (body
+      (list
+        (listitem
+          (bullet
+            (segment))
+          (paragraph
+            (expr)
+            (expr))
+          (list
+            (listitem
+              (bullet
+                (segment))
+              (paragraph
+                (expr)
+                (expr))
+              (block
+                (fence)
+                (contents
+                  (expr))
+                (fence)))
+            (listitem
+              (bullet
+                (segment))
+              (paragraph
+                (expr)
+                (expr)))))
+        (listitem
+          (bullet
+            (segment))
+          (paragraph
+            (expr)
+            (expr)))))))
+
+================================================================================
+checkboxes: open, done, partial
+================================================================================
+
+-  [ ] open
+-  [x] done
+-  [-] partly
+
+--------------------------------------------------------------------------------
+
+(document
+  (body
+    (list
+      (listitem
+        (bullet
+          (segment))
+        (checkbox)
+        (paragraph
+          (expr)))
+      (listitem
+        (bullet
+          (segment))
+        (checkbox)
+        (paragraph
+          (expr)))
+      (listitem
+        (bullet
+          (segment))
+        (checkbox)
+        (paragraph
+          (expr))))))
+
+================================================================================
+a bracket pair in the middle of the text is not a checkbox
+================================================================================
+
+-  see [ ] here
+
+--------------------------------------------------------------------------------
+
+(document
+  (body
+    (list
+      (listitem
+        (bullet
+          (segment))
+        (paragraph
+          (expr)
+          (expr)
+          (expr)
+          (expr))))))
+
+================================================================================
+checkboxes with other marks
+================================================================================
+
+-  [/] in progress
+-  [!] important
+-  [n] note
+-  [%] partial
+-  [1] not a box
+
+--------------------------------------------------------------------------------
+
+(document
+  (body
+    (list
+      (listitem
+        (bullet
+          (segment))
+        (checkbox)
+        (paragraph
+          (expr)
+          (expr)))
+      (listitem
+        (bullet
+          (segment))
+        (checkbox)
+        (paragraph
+          (expr)))
+      (listitem
+        (bullet
+          (segment))
+        (checkbox)
+        (paragraph
+          (expr)))
+      (listitem
+        (bullet
+          (segment))
+        (checkbox)
+        (paragraph
+          (expr)))
+      (listitem
+        (bullet
+          (segment))
+        (paragraph
+          (expr)
+          (expr)
+          (expr)
+          (expr))))))

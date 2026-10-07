@@ -36,7 +36,7 @@ const tagQuotes = [
 
 // const reTagName = /[a-zA-Z0-9_-]+[!?\\/\-+*=~^%@&#$]/;
 // const reTagKey = /[a-zA-Z0-9_-]/;
-const reTagName = /[a-zA-Z_][a-zA-Z0-9_-]*/;
+const reTagName = /[a-zA-Z_][a-zA-Z0-9_]*/;
 const reTagKey = reTagName;
 const reTagBracket = /[\[\]{}()<>]/;
 const reTagOpenBracket = /[\[{(<]/;
@@ -212,14 +212,23 @@ export default grammar({
 
     listitem: $ => seq(
       field('bullet', $.bullet),
-      // $._two_spaces,
-      /[ \t]{2,}/,
-      // optional(field('checkbox', $.checkbox)),
+      // Two blanks separate the bullet from its contents. An empty listitem
+      // (`key_:` or `-` then end of line) has no separator: its contents, if
+      // any, start with the newline (e.g. a sublist on the following lines).
+      // The scanner only emits _bullet for these two shapes.
+      optional(/[ \t]{2,}/),
+      optional(field('checkbox', $.checkbox)),
       choice(
         $._eof,
         field('contents', $._body_contents),
       ),
     ),
+
+    // `[ ]` open, `[x]` done, and any other single mark that is not a digit or a bracket, `[/]` `[!]` `[n]` ...:
+    // the first thing of an item's contents. What a mark means is decided by the plugin, the grammar only
+    // knows the shape. A pair tag opener is `[ name #]`, which the scanner only emits when the name and the
+    // closing token are there, and a cookie or a reference has digits, so they never compete.
+    checkbox: $ => token(prec(2, /\[([ ]|[^\[\]\s0-9])\]/)),
 
     bullet: $ => seq(
       $._bullet,

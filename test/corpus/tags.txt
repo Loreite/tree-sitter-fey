@@ -1,0 +1,297 @@
+============================================================
+scope tag with values and keys
+============================================================
+
+word {# status, TODO, A; priority: B #} more
+
+------------------------------------------------------------
+
+(document
+  (body
+    (paragraph
+      (expr)
+      (scope_tag
+        (tag_start)
+        (tag_name)
+        (value)
+        (value)
+        (value
+          (key)
+          (value))
+        (tag_end))
+      (expr))))
+
+============================================================
+scope tag alone on a line
+============================================================
+
+{# comment #}
+
+------------------------------------------------------------
+
+(document
+  (body
+    (scope_tag
+      (tag_start)
+      (tag_name)
+      (tag_end))))
+
+============================================================
+scope tag as the only content of a list item
+============================================================
+
+-  one
+-  {# comment #}
+-  three
+
+------------------------------------------------------------
+
+(document
+  (body
+    (list
+      (listitem
+        (bullet
+          (segment))
+        (paragraph
+          (expr)))
+      (listitem
+        (bullet
+          (segment))
+        (scope_tag
+          (tag_start)
+          (tag_name)
+          (tag_end)))
+      (listitem
+        (bullet
+          (segment))
+        (paragraph
+          (expr))))))
+
+============================================================
+line tag
+============================================================
+
+#[ math ] a^2 # after
+
+------------------------------------------------------------
+
+(document
+  (body
+    (paragraph
+      (line_tag
+        (tag_start)
+        (tag_name)
+        (tag_end)
+        (body)
+        (body_end))
+      (expr))))
+
+============================================================
+block tag with an indented body
+============================================================
+
+[ note ]#
+   first
+
+   second
+
+------------------------------------------------------------
+
+(document
+  (body
+    (block_tag
+      (tag_start)
+      (tag_name)
+      (tag_end)
+      (body
+        (paragraph
+          (expr))
+        (paragraph
+          (expr))))))
+
+============================================================
+pair tag with a list inside
+============================================================
+
+[ drawer #]
+-  one
+-  two
+[# drawer ]
+
+------------------------------------------------------------
+
+(document
+  (body
+    (pair_tag
+      (pair_open
+        (tag_start)
+        (tag_name)
+        (tag_end))
+      (body
+        (list
+          (listitem
+            (bullet
+              (segment))
+            (paragraph
+              (expr)))
+          (listitem
+            (bullet
+              (segment))
+            (paragraph
+              (expr)))))
+      (pair_close
+        (tag_start)
+        (tag_name)
+        (tag_end)))))
+
+============================================================
+date tag with a sigil
+============================================================
+
+on {@ date, 2026-10-07 Wed; active: false @}
+
+------------------------------------------------------------
+
+(document
+  (body
+    (paragraph
+      (expr)
+      (scope_tag
+        (tag_start)
+        (tag_name)
+        (value)
+        (value
+          (key)
+          (value))
+        (tag_end)))))
+
+============================================================
+escaped delimiters in a head
+============================================================
+
+{# link, a\,b\; c #}
+
+------------------------------------------------------------
+
+(document
+  (body
+    (scope_tag
+      (tag_start)
+      (tag_name)
+      (value)
+      (tag_end))))
+
+============================================================
+nested tag inside a block body
+============================================================
+
+[ link, a.fey ]#
+   text {@ fn, 1 @} more
+
+------------------------------------------------------------
+
+(document
+  (body
+    (block_tag
+      (tag_start)
+      (tag_name)
+      (value)
+      (tag_end)
+      (body
+        (paragraph
+          (expr)
+          (scope_tag
+            (tag_start)
+            (tag_name)
+            (value)
+            (tag_end))
+          (expr))))))
+
+============================================================
+fenced block with arguments
+============================================================
+
+###  src lua :tangle out.lua
+print(1)
+###
+
+------------------------------------------------------------
+
+(document
+  (body
+    (block
+      (fence)
+      (expr)
+      (expr)
+      (expr)
+      (expr)
+      (contents
+        (expr))
+      (fence))))
+
+============================================================
+fenced block in a list item
+============================================================
+
+-  item
+
+   ###  src python
+   x = 1
+   ###
+
+------------------------------------------------------------
+
+(document
+  (body
+    (list
+      (listitem
+        (bullet
+          (segment))
+        (paragraph
+          (expr))
+        (block
+          (fence)
+          (expr)
+          (expr)
+          (contents
+            (expr)
+            (expr)
+            (expr))
+          (fence))))))
+
+============================================================
+headings with a status and labels
+============================================================
+
+  I. {# status, TODO #} Title {# labels, a #}
+
+  I.A. Child
+
+------------------------------------------------------------
+
+(document
+  (body)
+  (section
+    (heading
+      (signature
+        (segment))
+      (title
+        (scope_tag
+          (tag_start)
+          (tag_name)
+          (value)
+          (tag_end))
+        (expr)
+        (scope_tag
+          (tag_start)
+          (tag_name)
+          (value)
+          (tag_end))))
+    (body)
+    (section
+      (heading
+        (signature
+          (segment)
+          (segment))
+        (title
+          (expr))))))

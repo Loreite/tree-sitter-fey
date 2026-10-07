@@ -1,11 +1,9 @@
-;; Level-based headline highlighting using a custom predicate matcher
-(heading (heading_prefix) @prefix (#fey-is-heading-level? @prefix "1")) @org.headline.level1
-(heading (heading_prefix) @prefix (#fey-is-heading-level? @prefix "2")) @org.headline.level2
-(heading (heading_prefix) @prefix (#fey-is-heading-level? @prefix "3")) @org.headline.level3
-(heading (heading_prefix) @prefix (#fey-is-heading-level? @prefix "4")) @org.headline.level4
-(heading (heading_prefix) @prefix (#fey-is-heading-level? @prefix "5")) @org.headline.level5
-(heading (heading_prefix) @prefix (#fey-is-heading-level? @prefix "6")) @org.headline.level6
-(heading (heading_prefix) @prefix (#fey-is-heading-level? @prefix "7")) @org.headline.level7
-(heading (heading_prefix) @prefix (#fey-is-heading-level? @prefix "8")) @org.headline.level8
-(body (content (paragraph) @spell))
-
+;; The highlights of this grammar for tools that only have the grammar (the editor plugin has its own, richer set in
+;; `queries/fey/highlights.scm` of fey.nvim, which colours by tag form and by the names of tags).
+(heading signature: (signature) @markup.heading.marker)
+(heading title: (title) @markup.heading)
+(tag_name) @tag
+(tag_start) @punctuation.bracket
+(tag_end) @punctuation.bracket
+(key) @property
+(paragraph) @spell

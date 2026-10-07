@@ -604,14 +604,21 @@ static bool istabspace(TSLexer *lexer) {
 
 static Bullet getbullet(TSLexer *lexer, bool bullet) {
   bool matched = false;
+  bool bracket = false;
+  bool has_token = false;
+  bool token_underscore = false;
   if (check_delimiter(lexer) || check_closure(lexer, true, true)) {
+    bracket = check_closure(lexer, true, true);
     advance(lexer);
     matched = true;
   } else if (check_token(lexer)) {
+    has_token = true;
     do {
+      token_underscore = lexer->lookahead == '_';
       advance(lexer);
     } while (check_token(lexer));
     if (check_delimiter(lexer) || check_closure(lexer, true, true)) {
+      bracket = check_closure(lexer, true, true);
       advance(lexer);
       matched = true;
     }
@@ -620,6 +627,13 @@ static Bullet getbullet(TSLexer *lexer, bool bullet) {
     return NOTABULLET;
   if (bullet)
     return ISABULLET;
+
+  // Empty listitem: the bullet runs straight into the end of the line.
+  // Same shapes as is_empty_bullet in scan(): no token or a `_`-terminated
+  // one, and never a bracket.
+  if (check_eol(lexer))
+    return (!bracket && (!has_token || token_underscore)) ? ISABULLET
+                                                          : NOTABULLET;
 
   if (istabspace(lexer)) {
     skip(lexer);
@@ -1191,7 +1205,11 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       check_closure(lexer, true, false) &&
       !container_end_pending(scanner, lexer, valid_symbols, indent_length,
                              skipped)) {
-    scanner->block_tag_col = lexer->get_column(lexer);
+    // A block tag that opens right after a list bullet takes the indent of
+    // that line (the list item), not the column of its own bracket.
+    scanner->block_tag_col = (!at_line_start && in_list(scanner))
+                                 ? indent_top(scanner)
+                                 : (int16_t)lexer->get_column(lexer);
     return scan_bracket(scanner, lexer, valid_symbols, indent_length);
   }
 
@@ -1258,6 +1276,13 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   int32_t run_first = lexer->lookahead;
   int32_t run_open = 0;
   int run_len = 0;
+  // Whether the last segment's delimiter was a bracket (empty bullets
+  // may not use one).
+  bool last_seg_bracket = false;
+  // Whether the last segment had a token, and if so whether it ended in `_`
+  // (pure anonymous text, i.e. a data key like `key_:`).
+  bool last_seg_token = false;
+  bool last_token_underscore = false;
   // Mid-line, a line-tag gate sits at its sigil, not before the blanks that
   // precede it (like the bracket tags in scan_bracket). At a line start the
   // other zero-width tokens here (bullet, signature, ...) keep their end
@@ -1270,8 +1295,11 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
          check_closure(lexer, true, true) //
   ) {
     if (check_token(lexer)) {
-      while (check_token(lexer))
+      while (check_token(lexer)) {
+        last_token_underscore = lexer->lookahead == '_';
         skip(lexer);
+      }
+      last_seg_token = true;
       segmentable = false;
       fenceable = false;
       run_len = 99;
@@ -1279,6 +1307,7 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       run_len++;
       segments += 1;
       segmentable = true;
+      last_seg_bracket = false;
       if (fenceable && lexer->lookahead == fence_char) {
         fence_width += 1;
       } else {
@@ -1291,6 +1320,7 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       run_len++;
       segments += 1;
       segmentable = true;
+      last_seg_bracket = true;
       fenceable = false;
       skip(lexer);
     }
@@ -1299,10 +1329,28 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
                         check_open_bracket(run_open);
   bool ws_after_run = false;
 
+  // Indent of the line that holds this token. Mid-line, directly after a
+  // list bullet, `indent_length` only counts the blanks that separate the
+  // bullet from its contents, so the line starts where the list item does.
+  int16_t line_indent = (!at_line_start && in_list(scanner))
+                            ? indent_top(scanner)
+                            : indent_length;
+
   bool fence_looked_ahead = false;
   // Decide "delimiters run straight into the line end" BEFORE the fence
   // lookahead below can skip the single space after them.
   bool delims_hit_eol = lexer->lookahead == '\n' || lexer->lookahead == '\r';
+  // Empty listitem: a single segment that runs straight into the end of the
+  // line or input. Its value, if any, is the sublist on the following lines.
+  // Only two shapes qualify, so ordinary prose is never mistaken for one:
+  //   `-`      no token at all
+  //   `key_:`  a token that is pure anonymous text (ends in `_`)
+  // A wrapped paragraph line like `Done.` (token `Done`, no `_`) stays text,
+  // and bracket bullets are excluded because a line holding only `]` or `}`
+  // is the closer of a multi-line tag head.
+  bool is_empty_bullet = segmentable && segments == 1 && !last_seg_bracket &&
+                         (!last_seg_token || last_token_underscore) &&
+                         check_eol(lexer);
   if (fenceable) {
     bool valid_fence_suffix = false;
     if (lexer->lookahead == '\n' || lexer->lookahead == '\r' ||
@@ -1316,16 +1364,19 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       }
     }
 
-    if (valid_symbols[FENCE] && fence_width >= 3) {
+    // `newlines` > 0: the lookahead above skipped blank lines, and this
+    // token is zero-width before them. Let the grammar take the newlines
+    // first; the fence is seen again at the start of its own line.
+    if (valid_symbols[FENCE] && fence_width >= 3 && newlines == 0) {
       if (scanner->fence_indent_stack->len == 0) {
         if (valid_fence_suffix) {
-          VEC_PUSH(scanner->fence_indent_stack, indent_length);
+          VEC_PUSH(scanner->fence_indent_stack, line_indent);
           VEC_PUSH(scanner->fence_width_stack, fence_width);
           VEC_PUSH(scanner->fence_char_stack, fence_char);
           lexer->result_symbol = FENCE;
           return true;
         }
-      } else if (VEC_BACK(scanner->fence_indent_stack) == indent_length &&
+      } else if (VEC_BACK(scanner->fence_indent_stack) == line_indent &&
                  VEC_BACK(scanner->fence_width_stack) == fence_width &&
                  VEC_BACK(scanner->fence_char_stack) == fence_char) {
         VEC_POP(scanner->fence_indent_stack);
@@ -1359,7 +1410,18 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
     is_signature = (segments > 0 && !has_second_space);
   }
 
-  if (is_bullet && newlines == 0) {
+  // An empty bullet only exists where a list may start or continue;
+  // otherwise fall through (e.g. a lone `*` at EOF can still be a heading).
+  if (is_empty_bullet && newlines == 0 && at_line_start) {
+    if (valid_symbols[BULLET] && indent_length == indent_top(scanner)) {
+      lexer->result_symbol = BULLET;
+      return true;
+    }
+    if (valid_symbols[LIST_START] && indent_length > indent_top(scanner))
+      return indent(scanner, lexer, indent_length, ISABULLET);
+  }
+
+  if (is_bullet && newlines == 0 && at_line_start) {
     if (valid_symbols[BULLET]                   //
         && indent_length == indent_top(scanner) //
     ) {

@@ -1,17 +1,28 @@
 ============================================================
-Unclosed pair at EOF
-:error
+Unclosed pair at EOF is closed there
 ============================================================
 
 text [ b #]never closed
 
 ------------------------------------------------------------
 
-
+(document
+  (body
+    (paragraph
+      (expr)
+      (pair_tag
+        (pair_open
+          (tag_start)
+          (tag_name)
+          (tag_end))
+        (body
+          (paragraph
+            (expr)
+            (expr)))
+        (implicit_close)))))
 
 ============================================================
-Unclosed pair at section end
-:error
+Unclosed pair at section end is closed there
 ============================================================
 
   1. One
@@ -20,4 +31,28 @@ Unclosed pair at section end
 
 ------------------------------------------------------------
 
-
+(document
+  (body)
+  (section
+    (heading
+      (signature
+        (segment))
+      (title
+        (expr)))
+    (body
+      (paragraph
+        (pair_tag
+          (pair_open
+            (tag_start)
+            (tag_name)
+            (tag_end))
+          (body
+            (paragraph
+              (expr)))
+          (implicit_close)))))
+  (section
+    (heading
+      (signature
+        (segment))
+      (title
+        (expr)))))

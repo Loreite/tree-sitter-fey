@@ -1,0 +1,195 @@
+============================================================
+table with a crown row
+============================================================
+
+| h1 | h2 |
++====+====+
+| a  | b  |
+
+------------------------------------------------------------
+
+(document
+  (body
+    (table
+      (row
+        (cell
+          (contents
+            (expr)))
+        (cell
+          (contents
+            (expr))))
+      (hr)
+      (row
+        (cell
+          (contents
+            (expr)))
+        (cell
+          (contents
+            (expr)))))))
+
+============================================================
+table with no rule
+============================================================
+
+| a | b |
+| c | d |
+
+------------------------------------------------------------
+
+(document
+  (body
+    (table
+      (row
+        (cell
+          (contents
+            (expr)))
+        (cell
+          (contents
+            (expr))))
+      (row
+        (cell
+          (contents
+            (expr)))
+        (cell
+          (contents
+            (expr)))))))
+
+============================================================
+table with merged columns
+============================================================
+
+| h1 | h2 | h3 |
++====+====+====+
+v----*----v----v
+| a       | c  |
+| b       |    |
+^----^----^----^
+
+------------------------------------------------------------
+
+(document
+  (body
+    (table
+      (row
+        (cell
+          (contents
+            (expr)))
+        (cell
+          (contents
+            (expr)))
+        (cell
+          (contents
+            (expr))))
+      (hr)
+      (row_block
+        (cbo
+          (cbo_cell)
+          (cbo_cell
+            (cb_corner))
+          (cbo_cell
+            (cb_corner)))
+        (row
+          (cell
+            (contents
+              (expr)))
+          (cell
+            (contents
+              (expr))))
+        (row
+          (cell
+            (contents
+              (expr)))
+          (cell))
+        (cbe
+          (cbe_cell)
+          (cbe_cell)
+          (cbe_cell))))))
+
+============================================================
+table with a merged row
+============================================================
+
+| h1 | h2 | h3 |
++====+====+====+
+v----v----v----v
+| a  | b  | c  |
++~~~~+~~~~+    +
+| d  | e  |    |
+^----^----^----^
+
+------------------------------------------------------------
+
+(document
+  (body
+    (table
+      (row
+        (cell
+          (contents
+            (expr)))
+        (cell
+          (contents
+            (expr)))
+        (cell
+          (contents
+            (expr))))
+      (hr)
+      (row_block
+        (cbo
+          (cbo_cell
+            (cb_corner))
+          (cbo_cell
+            (cb_corner))
+          (cbo_cell
+            (cb_corner)))
+        (row
+          (cell
+            (contents
+              (expr)))
+          (cell
+            (contents
+              (expr)))
+          (cell
+            (contents
+              (expr))))
+        (cbi
+          (cbi_cell
+            (cb_corner))
+          (cbi_cell
+            (cb_corner))
+          (cbi_cell
+            (vmerge)))
+        (row
+          (cell
+            (contents
+              (expr)))
+          (cell
+            (contents
+              (expr)))
+          (cell))
+        (cbe
+          (cbe_cell)
+          (cbe_cell)
+          (cbe_cell))))))
+
+============================================================
+table cell with a tag
+============================================================
+
+| {@ link, a.fey @} | x |
+
+------------------------------------------------------------
+
+(document
+  (body
+    (table
+      (row
+        (cell
+          (contents
+            (scope_tag
+              (tag_start)
+              (tag_name)
+              (value)
+              (tag_end))))
+        (cell
+          (contents
+            (expr)))))))
