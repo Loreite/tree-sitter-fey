@@ -779,3 +779,62 @@ a [ x #]
           (tag_name)
           (tag_end)))
       (expr))))
+
+============================================================
+a bar in a paragraph of a pair body is text
+============================================================
+
+[ q #]
+a | b
+
+"|" - meaning
+[# q ]
+
+------------------------------------------------------------
+
+(document
+  (body
+    (pair_tag
+      (pair_open
+        (tag_start)
+        (tag_name)
+        (tag_end))
+      (body
+        (paragraph
+          (expr)
+          (expr)
+          (expr))
+        (paragraph
+          (expr)
+          (expr)
+          (expr)))
+      (pair_close
+        (tag_start)
+        (tag_name)
+        (tag_end)))))
+
+============================================================
+a pair opener head may hold a sign and a bracket
+============================================================
+
+[ q, a -> b :) #]
+body
+[# q ]
+
+------------------------------------------------------------
+
+(document
+  (body
+    (pair_tag
+      (pair_open
+        (tag_start)
+        (tag_name)
+        (value)
+        (tag_end))
+      (body
+        (paragraph
+          (expr)))
+      (pair_close
+        (tag_start)
+        (tag_name)
+        (tag_end)))))

@@ -295,3 +295,150 @@ headings with a status and labels
           (segment))
         (title
           (expr))))))
+
+============================================================
+scope tag values may start with a closing bracket
+============================================================
+
+x {@ link, a; desc: A > B ] C @} y
+
+------------------------------------------------------------
+
+(document
+  (body
+    (paragraph
+      (expr)
+      (scope_tag
+        (tag_start)
+        (tag_name)
+        (value)
+        (value
+          (key)
+          (value))
+        (tag_end))
+      (expr))))
+
+============================================================
+a sign and a bracket that do not end the tag are words of its head
+============================================================
+
+x {@ link, a; desc: go -> there :) #] @} y
+
+------------------------------------------------------------
+
+(document
+  (body
+    (paragraph
+      (expr)
+      (scope_tag
+        (tag_start)
+        (tag_name)
+        (value)
+        (value
+          (key)
+          (value))
+        (tag_end))
+      (expr))))
+
+============================================================
+the sigil and the bracket of the opening end the head, on a line of its own too
+============================================================
+
+{# prop; a: -> b
+   c
+#}
+
+------------------------------------------------------------
+
+(document
+  (body
+    (scope_tag
+      (tag_start)
+      (tag_name)
+      (value
+        (key)
+        (value))
+      (tag_end))))
+
+============================================================
+a block tag head may hold the closing brackets of other kinds
+============================================================
+
+[ link, a; desc: x > y ) z -> w ]#
+   t
+
+------------------------------------------------------------
+
+(document
+  (body
+    (block_tag
+      (tag_start)
+      (tag_name)
+      (value)
+      (value
+        (key)
+        (value))
+      (tag_end)
+      (body
+        (paragraph
+          (expr))))))
+
+============================================================
+a line tag head may hold the closing brackets of other kinds
+============================================================
+
+#[ link, a; desc: x > y ) z -> w ] t #
+
+------------------------------------------------------------
+
+(document
+  (body
+    (paragraph
+      (line_tag
+        (tag_start)
+        (tag_name)
+        (value)
+        (value
+          (key)
+          (value))
+        (tag_end)
+        (body)
+        (body_end)))))
+
+============================================================
+the closing bracket of the opening is not a word: the text stays text
+============================================================
+
+[ foo, a ] b
+
+------------------------------------------------------------
+
+(document
+  (body
+    (paragraph
+      (expr)
+      (expr)
+      (expr)
+      (expr)
+      (expr))))
+
+============================================================
+a sign, words and a matching end are text, not a tag with no values
+============================================================
+
+{{- if .Groups -}}
+{# note x #}
+
+------------------------------------------------------------
+
+(document
+  (body
+    (paragraph
+      (expr)
+      (expr)
+      (expr)
+      (expr)
+      (expr)
+      (expr)
+      (expr)
+      (expr))))

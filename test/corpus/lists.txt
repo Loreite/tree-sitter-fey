@@ -379,3 +379,43 @@ checkboxes with other marks
           (expr)
           (expr)
           (expr))))))
+
+============================================================
+fence on the bullet line closes at the text column
+============================================================
+
+-  ###  src lua
+   x
+   ###
+-  next
+
+###  src
+y
+###
+
+------------------------------------------------------------
+
+(document
+  (body
+    (list
+      (listitem
+        (bullet
+          (segment))
+        (block
+          (fence)
+          (expr)
+          (expr)
+          (contents
+            (expr))
+          (fence)))
+      (listitem
+        (bullet
+          (segment))
+        (paragraph
+          (expr))))
+    (block
+      (fence)
+      (expr)
+      (contents
+        (expr))
+      (fence))))

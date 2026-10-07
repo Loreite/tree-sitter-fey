@@ -72,7 +72,16 @@ enum TokenType {
   LINE_TAG_START,
   SCOPE_TAG_START,
   SCOPE_LINE_TAG_START,
+  HEAD_END,
+  HEAD_END_BARE,
 };
+
+// What ends a head, by the form of the tag (the closing bracket is the one
+// that matches the opening one):
+//   HEAD_SIGIL    a sigil and the bracket     `#}`    scope tag, pair opener
+//   HEAD_BRACKET  the bracket                 `]`     line tag
+//   HEAD_BLOCK    the bracket and any sign    `]#`    block tag
+enum { HEAD_NONE, HEAD_SIGIL, HEAD_BRACKET, HEAD_BLOCK };
 
 typedef enum {
   NOTABULLET,
@@ -142,6 +151,10 @@ typedef struct {
   stack *tag_indent_length_stack;
 
   stack *fence_indent_stack;
+  // Where the opener starts. A fence opened right after a bullet may be closed
+  // at any indent from that of the bullet's line to this column; on a line of
+  // its own the two are the same.
+  stack *fence_col_stack;
   stack *fence_width_stack;
   stack *fence_char_stack;
 
@@ -154,6 +167,14 @@ typedef struct {
   // next scan owes it a zero-width ENDOFFILE (the grammar's _eol).
   bool eol_owed;
   int16_t base_indent;
+  // The head being read, and what ends it (HEAD_NONE when none): the scanner
+  // recognises a tag before its grammar reads it, and remembers its opening
+  // bracket (and sigil) so that the end of the head is exactly the closer that
+  // belongs to it. Any other sign or bracket is a word of the head. Set when
+  // the tag is recognised, cleared when its end is scanned.
+  int16_t head_form;
+  int16_t head_sigil;
+  int16_t head_close;
 } Scanner;
 
 static inline void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
@@ -323,8 +344,8 @@ static bool entry_matches(PairEntry top, PairEntry closer) {
 
 // ---------------------------------------------------------------------------
 // Serialized layout (must match deserialize exactly):
-//   [base_indent hi][base_indent lo][eol_owed]
-//   [fence_len (0|1)] [fence indent][fence width][fence char]   (if fence_len)
+//   [base_indent hi][base_indent lo][eol_owed][head form][head sigil][head close]
+//   [fence_len (0|1)] [fence indent][fence col][fence width][fence char]   (if fence_len)
 //   [tag_count]    [tag indents ...]        (all entries; no sentinel)
 //   [pair_depth hi][pair_depth lo][pair_stored]
 //                  [entries ...]            (innermost `pair_stored` entries,
@@ -343,11 +364,15 @@ static unsigned serialize(Scanner *scanner, char *buffer) {
   PUT((scanner->base_indent >> 8) & 0xFF);
   PUT(scanner->base_indent & 0xFF);
   PUT(scanner->eol_owed ? 1 : 0);
+  PUT(scanner->head_form);
+  PUT(scanner->head_sigil);
+  PUT(scanner->head_close);
 
   // fences don't nest: at most one entry is ever live
   if (scanner->fence_indent_stack->len > 0) {
     PUT(1);
     PUT(VEC_BACK(scanner->fence_indent_stack));
+    PUT(VEC_BACK(scanner->fence_col_stack));
     PUT(VEC_BACK(scanner->fence_width_stack));
     PUT(VEC_BACK(scanner->fence_char_stack));
   } else {
@@ -430,6 +455,7 @@ static void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
   VEC_PUSH(scanner->bullet_stack, NOTABULLET);
 
   VEC_CLEAR(scanner->fence_indent_stack);
+  VEC_CLEAR(scanner->fence_col_stack);
   VEC_CLEAR(scanner->fence_width_stack);
   VEC_CLEAR(scanner->fence_char_stack);
   VEC_CLEAR(scanner->tag_indent_length_stack);
@@ -437,8 +463,11 @@ static void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
 
   scanner->base_indent = -1;
   scanner->eol_owed = false;
+  scanner->head_form = HEAD_NONE;
+  scanner->head_sigil = 0;
+  scanner->head_close = 0;
 
-  if (length < 3)
+  if (length < 6)
     return;
 
   size_t i = 0;
@@ -447,10 +476,14 @@ static void deserialize(Scanner *scanner, const char *buffer, unsigned length) {
   uint8_t base_lo = GET();
   scanner->base_indent = (int16_t)((base_hi << 8) | base_lo);
   scanner->eol_owed = GET() != 0;
+  scanner->head_form = GET();
+  scanner->head_sigil = GET();
+  scanner->head_close = GET();
 
   uint8_t fence_len = GET();
   if (fence_len > 0) {
     VEC_PUSH(scanner->fence_indent_stack, GET());
+    VEC_PUSH(scanner->fence_col_stack, GET());
     VEC_PUSH(scanner->fence_width_stack, GET());
     VEC_PUSH(scanner->fence_char_stack, GET());
   }
@@ -588,6 +621,32 @@ static bool check_open_bracket(int32_t c) {
 static bool compare_closure(int32_t open, int32_t close) {
   return (open == '[' && close == ']') || (open == '(' && close == ')') ||
          (open == '{' && close == '}') || (open == '<' && close == '>');
+}
+
+static int32_t close_of(int32_t open) {
+  return open == '[' ? ']' : open == '(' ? ')' : open == '{' ? '}' : '>';
+}
+
+// Is the lookahead the first character of the end of the head being read?
+static bool head_end_starts(const Scanner *s, const TSLexer *lexer) {
+  return lexer->lookahead ==
+         (s->head_form == HEAD_SIGIL ? s->head_sigil : s->head_close);
+}
+
+// Called where head_end_starts is true: consumes the end of the head if the
+// rest of it is there.
+static bool head_end_matches(const Scanner *s, TSLexer *lexer) {
+  advance(lexer);
+  if (s->head_form == HEAD_SIGIL) {
+    if (lexer->lookahead != s->head_close)
+      return false;
+    advance(lexer);
+  } else if (s->head_form == HEAD_BLOCK) {
+    if (token_index(lexer->lookahead) < 0)
+      return false;
+    advance(lexer);
+  }
+  return true;
 }
 
 static bool check_nl(TSLexer *lexer) {
@@ -739,28 +798,28 @@ static OpenShape scan_open_shape(TSLexer *lexer, int32_t open, NameAcc *name,
       continue;
     }
 
-    if (prev_ws && bracket_index(c) >= 0 && check_closure(lexer, false, true)) {
-      // ` ]` ends every tag head (a value may not start with a close
-      // bracket). Followed by a tag token it is a block tag.
-      if (!compare_closure(open, c))
-        return SHAPE_NONE;
+    if (prev_ws && bracket_index(c) >= 0 && check_closure(lexer, false, true) &&
+        compare_closure(open, c)) {
+      // ` ]`, the closing bracket of the opening, ends the head. Followed by a
+      // tag token it is a block tag. (A closing bracket of another kind is a
+      // word, below.)
       advance(lexer);
       return check_tag_token(lexer) ? SHAPE_BLOCK_TAG : SHAPE_NONE;
     }
 
     if (prev_ws && token_index(c) >= 0) {
       advance(lexer);
-      if (check_closure(lexer, false, true)) {
+      if (check_closure(lexer, false, true) &&
+          compare_closure(open, lexer->lookahead)) {
         // ` #]` ends the head of a pair opener
-        if (!compare_closure(open, lexer->lookahead))
-          return SHAPE_NONE;
         *token = token_index(c);
         advance(lexer);
         while (istabspace(lexer))
           advance(lexer);
         return check_eol(lexer) ? SHAPE_PAIR_BLOCK : SHAPE_PAIR_INLINE;
       }
-      // a value word that starts with a tag token
+      // a value word that starts with a tag token (`->` is one: a sign and a
+      // bracket that is not this tag's closing bracket)
       if (!in_values)
         return SHAPE_NONE;
       prev_ws = false;
@@ -780,7 +839,8 @@ static OpenShape scan_open_shape(TSLexer *lexer, int32_t open, NameAcc *name,
 
 static bool scan_pair_open(Scanner *scanner, TSLexer *lexer,
                            const bool *valid_symbols, OpenShape shape,
-                           const NameAcc *name, int bracket, int token) {
+                           const NameAcc *name, int32_t open_char, int bracket,
+                           int token) {
   TSSymbol sym;
   if (shape == SHAPE_PAIR_BLOCK && valid_symbols[PAIR_BLOCK_START])
     sym = PAIR_BLOCK_START;
@@ -798,6 +858,9 @@ static bool scan_pair_open(Scanner *scanner, TSLexer *lexer,
   e.indent_floor = (uint8_t)(ifl > 255 ? 255 : ifl);
   e.tag_floor = (uint8_t)(tfl > 255 ? 255 : tfl);
   scanner->eol_owed = false;
+  scanner->head_form = HEAD_SIGIL;
+  scanner->head_sigil = (unsigned char)PAIR_TOKENS[token];
+  scanner->head_close = close_of(open_char);
   VEC_PUSH(scanner->pair_stack, e);
   lexer->result_symbol = sym;
   return true;
@@ -816,7 +879,8 @@ static bool scan_token_tag(Scanner *scanner, TSLexer *lexer,
     advance(lexer);
 
   // `[# name ]`: a pair closer
-  if (is_name_start(lexer->lookahead)) {
+  bool named = is_name_start(lexer->lookahead);
+  if (named) {
     NameAcc name;
     name_init(&name);
     while (is_name_char(lexer->lookahead)) {
@@ -866,10 +930,17 @@ static bool scan_token_tag(Scanner *scanner, TSLexer *lexer,
         valid_symbols[SCOPE_LINE_TAG_START]))
     return false;
 
-  // `[# name ... #]`: the grammar's closer token is sigil- and
-  // bracket-agnostic, so the FIRST "<ws><sigil><close>" ends the head. It
-  // must repeat the opener's sigil and match its bracket, or no gate is
-  // emitted and the text stays plain text.
+  // A tag has a name, and after the name only a list of values and keys: the
+  // text `{{- if .x -}}` (a sign, a blank, words) is text, even though it ends
+  // in a sign and a bracket that match.
+  if (!named)
+    return false;
+  bool in_values = false;
+
+  // `[# name ... #]`: the head ends at the first "<ws><sigil><close>" that
+  // repeats the opener's sigil and matches its bracket (scanned again as
+  // HEAD_END, which remembers both). Other signs and brackets are words. With
+  // no such end the text stays plain text.
   bool crossed_nl = false;
   int budget = PAIR_LOOKAHEAD_CAP * 4;
   while (budget-- > 0) {
@@ -891,28 +962,36 @@ static bool scan_token_tag(Scanner *scanner, TSLexer *lexer,
 
     if (prev_space && token_index(c) >= 0) {
       advance(lexer);
-      if (check_closure(lexer, false, true)) {
-        if (c != tag_token || !compare_closure(open, lexer->lookahead))
-          return false;
+      if (check_closure(lexer, false, true) && c == tag_token &&
+          compare_closure(open, lexer->lookahead)) {
         advance(lexer);
-        if (valid_symbols[STANDALONE_TAG_START] && check_eol(lexer)) {
-          lexer->result_symbol = STANDALONE_TAG_START;
-          return true;
-        }
-        if (valid_symbols[SCOPE_TAG_START]) {
-          lexer->result_symbol = SCOPE_TAG_START;
-          return true;
-        }
-        if (valid_symbols[SCOPE_LINE_TAG_START] && !crossed_nl) {
-          lexer->result_symbol = SCOPE_LINE_TAG_START;
-          return true;
-        }
-        return false;
+        TSSymbol gate;
+        if (valid_symbols[STANDALONE_TAG_START] && check_eol(lexer))
+          gate = STANDALONE_TAG_START;
+        else if (valid_symbols[SCOPE_TAG_START])
+          gate = SCOPE_TAG_START;
+        else if (valid_symbols[SCOPE_LINE_TAG_START] && !crossed_nl)
+          gate = SCOPE_LINE_TAG_START;
+        else
+          return false;
+        scanner->head_form = HEAD_SIGIL;
+        scanner->head_sigil = (int16_t)tag_token;
+        scanner->head_close = (int16_t)close_of(open);
+        lexer->result_symbol = gate;
+        return true;
       }
+      // any other sign and bracket (`->`, `:)`) is a word of the head
+      if (!in_values)
+        return false;
       prev_space = false;
       continue;
     }
 
+    if (!in_values) {
+      if (c != ',' && c != ';')
+        return false; // `{# foo bar #}` etc.: plain text
+      in_values = true;
+    }
     prev_space = false;
     advance(lexer);
   }
@@ -962,8 +1041,8 @@ static bool scan_line_tag_head(TSLexer *lexer, int32_t open) {
       advance(lexer);
       continue;
     }
-    if (prev_ws && check_closure(lexer, false, true))
-      return compare_closure(open, c);
+    if (prev_ws && check_closure(lexer, false, true) && compare_closure(open, c))
+      return true;
     if (!in_values) {
       if (c != ',' && c != ';')
         return false; // `#[ foo bar ]` etc.: plain text
@@ -993,12 +1072,15 @@ static bool scan_bracket(Scanner *scanner, TSLexer *lexer,
     OpenShape shape = scan_open_shape(lexer, open, &name, &token);
     switch (shape) {
     case SHAPE_BLOCK_TAG:
-      if (valid_symbols[BLOCK_TAG_START])
+      if (valid_symbols[BLOCK_TAG_START]) {
+        scanner->head_form = HEAD_BLOCK;
+        scanner->head_close = (int16_t)close_of(open);
         return indent_block_tag(scanner, lexer, scanner->block_tag_col);
+      }
       return false;
     case SHAPE_PAIR_INLINE:
     case SHAPE_PAIR_BLOCK:
-      return scan_pair_open(scanner, lexer, valid_symbols, shape, &name,
+      return scan_pair_open(scanner, lexer, valid_symbols, shape, &name, open,
                             bracket_index(open), token);
     default:
       return false;
@@ -1085,10 +1167,43 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   // value), peek at the next line: if it starts with a tag closer (`]`,
   // `#]`, `]#`, ...) it is TAG_NL (the start of tag_close), otherwise the
   // value continues and it is TAG_VALUE_NL.
-  if (valid_symbols[TAG_NL] || valid_symbols[TAG_VALUE_NL]) {
+  // The end of the head of a scope tag or a pair opener (HEAD_END_BARE on a
+  // line of its own, after a line break; HEAD_END after a blank): the sigil and
+  // the bracket of the opening, and nothing else.
+  bool in_head = scanner->head_form != HEAD_NONE;
+  if (in_head && valid_symbols[HEAD_END_BARE]) {
+    if (head_end_starts(scanner, lexer)) {
+      if (!head_end_matches(scanner, lexer))
+        return false; // a word that starts like the end
+      lexer->mark_end(lexer);
+      scanner->head_form = HEAD_NONE;
+      lexer->result_symbol = HEAD_END_BARE;
+      return true;
+    }
+  }
+  if (valid_symbols[TAG_NL] || valid_symbols[TAG_VALUE_NL] ||
+      (in_head && valid_symbols[HEAD_END])) {
+    // In a head the blanks are part of the end (` #}`) and of the line break
+    // token alike; anywhere else they are skipped, they belong to neither.
+    bool head = in_head && valid_symbols[HEAD_END];
+    uint32_t blanks = 0;
     while (istabspace(lexer)) {
-      skip(lexer); // not part of the token (and not of any zero-width one)
+      if (head)
+        advance(lexer);
+      else
+        skip(lexer); // not part of the token (and not of any zero-width one)
       skipped++;
+      blanks++;
+    }
+    if (head && !check_nl(lexer)) {
+      if (blanks > 0 && head_end_starts(scanner, lexer) &&
+          head_end_matches(scanner, lexer)) {
+        lexer->mark_end(lexer);
+        scanner->head_form = HEAD_NONE;
+        lexer->result_symbol = HEAD_END;
+        return true;
+      }
+      return false;
     }
     if (check_nl(lexer)) {
       int16_t indent_length = 0;
@@ -1130,7 +1245,10 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       }
 
       bool closer = false;
-      if (check_closure(lexer, false, true)) {
+      if (head) {
+        // only the end that belongs to the opening ends the head
+        closer = head_end_starts(scanner, lexer) && head_end_matches(scanner, lexer);
+      } else if (check_closure(lexer, false, true)) {
         closer = true; // `]`, `]#`
       } else if (check_tag_token(lexer)) {
         advance(lexer); // peek only: the token already ends at mark_end
@@ -1268,6 +1386,7 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   // Zero-width lookahead for
   // block fences, listitem bullets, and heading signatures
   int16_t segments = 0;
+  uint32_t fence_col = lexer->get_column(lexer);
   int32_t fence_char = lexer->lookahead;
   int16_t fence_width = 0;
   bool fenceable = true;
@@ -1335,6 +1454,10 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   int16_t line_indent = (!at_line_start && in_list(scanner))
                             ? indent_top(scanner)
                             : indent_length;
+  // A fence that follows a bullet starts at the column of the item's text. Its
+  // closer may line up with that column as well as with the bullet: see the
+  // fence stacks.
+  int16_t fence_open_col = at_line_start ? line_indent : (int16_t)fence_col;
 
   bool fence_looked_ahead = false;
   // Decide "delimiters run straight into the line end" BEFORE the fence
@@ -1371,15 +1494,18 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
       if (scanner->fence_indent_stack->len == 0) {
         if (valid_fence_suffix) {
           VEC_PUSH(scanner->fence_indent_stack, line_indent);
+          VEC_PUSH(scanner->fence_col_stack, fence_open_col);
           VEC_PUSH(scanner->fence_width_stack, fence_width);
           VEC_PUSH(scanner->fence_char_stack, fence_char);
           lexer->result_symbol = FENCE;
           return true;
         }
-      } else if (VEC_BACK(scanner->fence_indent_stack) == line_indent &&
+      } else if (VEC_BACK(scanner->fence_indent_stack) <= line_indent &&
+                 line_indent <= VEC_BACK(scanner->fence_col_stack) &&
                  VEC_BACK(scanner->fence_width_stack) == fence_width &&
                  VEC_BACK(scanner->fence_char_stack) == fence_char) {
         VEC_POP(scanner->fence_indent_stack);
+        VEC_POP(scanner->fence_col_stack);
         VEC_POP(scanner->fence_width_stack);
         VEC_POP(scanner->fence_char_stack);
         lexer->result_symbol = FENCE;
@@ -1486,6 +1612,8 @@ static bool scan(Scanner *scanner, TSLexer *lexer, const bool *valid_symbols) {
   // heading, bullet or fence on the same characters always wins first.
   if (valid_symbols[LINE_TAG_START] && line_tag_shape && ws_after_run &&
       newlines == 0 && scan_line_tag_head(lexer, run_open)) {
+    scanner->head_form = HEAD_BRACKET;
+    scanner->head_close = (int16_t)close_of(run_open);
     lexer->result_symbol = LINE_TAG_START; // zero-width (mark_end above)
     return true;
   }
@@ -1502,6 +1630,7 @@ void *tree_sitter_fey_external_scanner_create() {
   scanner->tag_indent_length_stack = (stack *)calloc(1, sizeof(stack));
 
   scanner->fence_indent_stack = (stack *)calloc(1, sizeof(stack));
+  scanner->fence_col_stack = (stack *)calloc(1, sizeof(stack));
   scanner->fence_width_stack = (stack *)calloc(1, sizeof(stack));
   scanner->fence_char_stack = (stack *)calloc(1, sizeof(stack));
 
@@ -1541,12 +1670,14 @@ void tree_sitter_fey_external_scanner_destroy(void *payload) {
   VEC_FREE(scanner->tag_indent_length_stack);
 
   VEC_FREE(scanner->fence_indent_stack);
+  VEC_FREE(scanner->fence_col_stack);
   VEC_FREE(scanner->fence_width_stack);
   VEC_FREE(scanner->fence_char_stack);
 
   VEC_FREE(scanner->pair_stack);
 
   free(scanner->fence_indent_stack);
+  free(scanner->fence_col_stack);
   free(scanner->fence_width_stack);
   free(scanner->fence_char_stack);
 

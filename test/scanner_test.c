@@ -79,7 +79,7 @@ static void mock_init(Mock *m, const char *src) {
 // emitted symbol or -1. *len receives the token length.
 static int scan_one(Scanner *s, const char *src, const int *syms, int nsyms,
                     size_t *len) {
-  bool valid[PAIR_STRAY_CLOSE + 1] = {0};
+  bool valid[HEAD_END_BARE + 1] = {0}; // every external symbol
   for (int k = 0; k < nsyms; k++)
     valid[syms[k]] = true;
   Mock m;
@@ -289,6 +289,7 @@ static void fill(Scanner *s, int depth, bool all_hash, int lists,
     VEC_PUSH(s->section_stack, (int16_t)(k % 7 + 1));
   VEC_PUSH(s->tag_indent_length_stack, 2);
   VEC_PUSH(s->fence_indent_stack, 0);
+  VEC_PUSH(s->fence_col_stack, 0);
   VEC_PUSH(s->fence_width_stack, 3);
   VEC_PUSH(s->fence_char_stack, '`');
   s->base_indent = 0;
@@ -349,7 +350,7 @@ static void round_trip(int depth, bool all_hash, int lists, int sections) {
 
 static void test_forgotten_matches_any(void) {
   Scanner *s = fresh();
-  PairEntry f = {PAIR_FORGOTTEN, 0, 0};
+  PairEntry f = {PAIR_FORGOTTEN, 0, 0, 0, 0};
   VEC_PUSH(s->pair_stack, f);
   CHECK(scan_one(s, "{$ anything }", INLINE_SYMS, NINLINE, NULL) ==
             PAIR_CLOSE_START,
@@ -364,14 +365,62 @@ static void test_deserialize_edge(void) {
   deserialize(s, "ab", 2); // length < 3 early return
   CHECK(s->pair_stack->len == 0, "cleared before early return");
   // truncated buffer: depth says 10, nothing stored, input ends
-  char trunc[] = {0, 0, 0, 0, 0, 10, 3};
+  // layout: base_indent (2), eol_owed, head form, sigil and close, fence_len, tag_count, pair depth (2), stored
+  char trunc[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 3};
   deserialize(s, trunc, sizeof trunc);
   CHECK(s->pair_stack->len == 10, "truncated: depth restored, got %u",
         s->pair_stack->len);
   // corrupt: stored > depth
-  char bad[] = {0, 0, 0, 0, 0, 1, 9};
+  char bad[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 9};
   deserialize(s, bad, sizeof bad);
   CHECK(s->pair_stack->len == 1, "stored clamped to depth");
+  tree_sitter_fey_external_scanner_destroy(s);
+}
+
+// The end of a head is the sigil and the bracket of its opening, no other sign
+// and bracket.
+static void test_head_end(void) {
+  static const int syms[] = {HEAD_END, TAG_NL, TAG_VALUE_NL};
+  static const int bare[] = {HEAD_END_BARE};
+  size_t len = 0;
+  Scanner *s = fresh();
+  s->head_form = HEAD_SIGIL;
+  s->head_sigil = '#';
+  s->head_close = '}';
+  CHECK(scan_one(s, " #} x", syms, 3, &len) == HEAD_END && len == 3,
+        "the end of the head, with its blank");
+  CHECK(s->head_form == HEAD_NONE, "and the head is closed");
+
+  s->head_form = HEAD_SIGIL;
+  s->head_sigil = '#';
+  s->head_close = '}';
+  CHECK(scan_one(s, " -> x #}", syms, 3, NULL) == -1, "`->` is a word");
+  CHECK(scan_one(s, " #] x", syms, 3, NULL) == -1, "another bracket is a word");
+  CHECK(scan_one(s, " @} x", syms, 3, NULL) == -1, "another sigil is a word");
+  CHECK(scan_one(s, "#} x", syms, 3, NULL) == -1, "a blank is needed");
+  CHECK(s->head_form == HEAD_SIGIL, "the head stays open");
+
+  CHECK(scan_one(s, "#}", bare, 1, &len) == HEAD_END_BARE && len == 2,
+        "the end on a line of its own");
+  CHECK(s->head_form == HEAD_NONE, "closes it");
+
+  s->head_form = HEAD_SIGIL;
+  s->head_sigil = '#';
+  s->head_close = '}';
+  CHECK(scan_one(s, "-> x", bare, 1, NULL) == -1, "`->` at the start of a line");
+
+  // a line tag ends at its bracket, a block tag at its bracket and a sign
+  s->head_form = HEAD_BRACKET;
+  s->head_close = ']';
+  CHECK(scan_one(s, " > x ]", syms, 3, NULL) == -1, "line tag: `>` is a word");
+  CHECK(scan_one(s, " ] t #", syms, 3, &len) == HEAD_END && len == 2,
+        "line tag: its bracket ends the head");
+  s->head_form = HEAD_BLOCK;
+  s->head_close = ']';
+  CHECK(scan_one(s, " ] x", syms, 3, NULL) == -1,
+        "block tag: the bracket alone is not the end");
+  CHECK(scan_one(s, " ]#", syms, 3, &len) == HEAD_END && len == 3,
+        "block tag: the bracket and a sign");
   tree_sitter_fey_external_scanner_destroy(s);
 }
 
@@ -382,6 +431,8 @@ int main(void) {
   test_classify();
   printf("hash collision\n");
   test_collision();
+  printf("head end\n");
+  test_head_end();
   printf("scan shapes\n");
   test_scan_shapes();
   printf("depth limit\n");

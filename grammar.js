@@ -97,6 +97,12 @@ export default grammar({
     $._line_tag_start,        // `#[ name ... ]`   closer bracket matches
     $._scope_tag_start,       // `[# name ... #]`  closer sigil + bracket match
     $._scope_line_tag_start,  // same, closer on the same line (table cells)
+    // The end of the head of a scope tag or a pair opener: the sigil and the
+    // bracket of its opening, after a blank (`_head_end`) or at the start of a
+    // line after a line break (`_head_end_bare`). The scanner remembers the
+    // opening, so any other sign and bracket (`->`, `:)`) is a word.
+    $._head_end,
+    $._head_end_bare,
   ],
 
 
@@ -360,15 +366,44 @@ export default grammar({
 
     _line_tag_head: $ => seq(
       $._tag_head,
-      tag_close($, ws_end(reTagCloseBracket), bare_end(reTagCloseBracket)),
+      head_close($),
     ),
 
-    // Shared by line_tag, scope_multi_tag and pair_open.
+    // The head of every tag form: a name, values after commas, keys after
+    // semicolons. What ends it is not the grammar's business: the scanner
+    // recognises the tag first and remembers how it was opened, and only the end
+    // that belongs to the opening (`_head_end`) closes the head. Every other
+    // sign and bracket is a word, so `{@ link, a; desc: x > y -> z @}` is a link
+    // whose description is `x > y -> z`.
     _tag_head: $ => seq(
       repeat($._tag_nl),
       field('name', alias(nim(reTagName), $.tag_name)),
       repeat($._tag_multi_value_choice),
       optional(alias(choice(nim(','), nim(';')), 'tag_delimiter')),
+    ),
+
+    _tag_multi_value_choice: $ => choice(
+      seq(
+        alias(nim(','), 'tag_delimiter'),
+        repeat($._tag_nl),
+        field('value', alias($._tag_value, $.value))
+      ),
+      seq(
+        alias(nim(';'), 'tag_delimiter'),
+        repeat($._tag_nl),
+        field('key_value', alias($._tag_key_value, $.value))
+      ),
+    ),
+
+    _tag_key_value: $ => seq(
+      field('key', alias(nim(reTagKey), $.key)),
+      alias(nim(/[.:=]/), 'tag_delimiter'),
+      field('value', alias($._tag_value, $.value)),
+    ),
+
+    _tag_value: $ => seq(
+      tag_word(',;'),
+      repeat(seq(optional($._tag_value_nl), tag_word(',;'))),
     ),
 
     // one per sigil: body and terminator depend only on the sigil
@@ -410,11 +445,7 @@ export default grammar({
       field('name', alias(nim(reTagName), $.tag_name)),
       repeat($._tag_multi_value_choice),
       optional(alias(choice(nim(','), nim(';')), 'tag_delimiter')),
-      tag_close(
-        $,
-        ws_end(reTagCloseBracket, reTagToken),
-        bare_end(reTagCloseBracket, reTagToken),
-      ),
+      head_close($),
     ),
 
     // ---- Pair tags --------------------------------------------------------
@@ -455,21 +486,38 @@ export default grammar({
     ),
 
     // Starts mid-line (after the opener) and may end mid-line (before the
-    // closer), with any block content in between.
-    _pair_body: $ => repeat1(choice(
-      alias($._pair_paragraph, $.paragraph),
-      $._nl,
-      $._element,
-    )),
+    // closer), with any block content in between. As in the body of a section,
+    // an element (a table, a list, a fenced block, a block tag, ...) can only
+    // follow a line break: a paragraph that does not end in one is the last
+    // thing before the closer, so `a | b` is a paragraph and not a paragraph
+    // followed by the table row `| b`.
+    _pair_body: $ => choice(
+      seq(
+        repeat1(choice(
+          alias($._pair_paragraph, $.paragraph),
+          $._nl,
+          $._element,
+        )),
+        optional(alias($._pair_paragraph_tail, $.paragraph)),
+      ),
+      alias($._pair_paragraph_tail, $.paragraph),
+    ),
 
-    // Like paragraph, but its last line need not end in a newline (the
-    // closer may follow it on the same line). prec.right: a newline after a
-    // line always belongs to the paragraph, which can still end there.
+    // A paragraph whose last line ends in a line break. prec.right: a newline
+    // after a line always belongs to the paragraph, which can still end there.
     _pair_paragraph: $ => prec.right(seq(
       $._inline_item,
       repeat(choice($._inline_item, seq($._nl, $._inline_item))),
-      optional($._nl),
+      $._nl,
     )),
+
+    // The last paragraph of a body: its last line is followed by the closer on
+    // the same line (or by the closer's own line, the break being left to the
+    // body).
+    _pair_paragraph_tail: $ => seq(
+      $._inline_item,
+      repeat(choice($._inline_item, seq($._nl, $._inline_item))),
+    ),
 
     pair_open: $ => seq($._pair_open_start, $._pair_open_head),
     _pair_block_open: $ => seq($._pair_block_start, $._pair_open_head),
@@ -484,8 +532,7 @@ export default grammar({
       field('tag_closure', alias(
         token(prec('special', seq(reTagOpenBracket, reWs))), $.tag_start)),
       $._tag_head,
-      tag_close($, ws_end(reTagToken, reTagCloseBracket),
-                bare_end(reTagToken, reTagCloseBracket)),
+      head_close($),
     ),
 
     pair_close: $ => seq(
@@ -512,15 +559,14 @@ export default grammar({
     _scope_tag_inner: $ => seq(
       field('tag_closure', alias(scope_tag_start(), $.tag_start)),
       $._tag_head,
-      tag_close($, ws_end(reTagToken, reTagCloseBracket),
-                bare_end(reTagToken, reTagCloseBracket)),
+      head_close($),
     ),
 
     scope_line_tag: $ => seq(
       $._scope_line_tag_start,
       field('tag_closure', alias(scope_tag_start(), $.tag_start)),
       $._tag_line_head,
-      field('tag_closure', alias(ws_end(reTagToken, reTagCloseBracket), $.tag_end)),
+      field('tag_closure', alias($._head_end, $.tag_end)),
     ),
 
     // Single-line counterpart of _tag_head, shared by every scope_line_tag.
@@ -528,19 +574,6 @@ export default grammar({
       field('name', alias(nim(reTagName), $.tag_name)),
       repeat($._tag_line_value_choice),
       optional(alias(choice(nim(','), nim(';')), 'tag_delimiter')),
-    ),
-
-    _tag_multi_value_choice: $ => choice(
-      seq(
-        alias(nim(','), 'tag_delimiter'),
-        repeat($._tag_nl),
-        field('value', alias($._tag_value, $.value))
-      ),
-      seq(
-        alias(nim(';'), 'tag_delimiter'),
-        repeat($._tag_nl),
-        field('key_value', alias($._tag_key_value, $.value))
-      ),
     ),
 
     _tag_line_value_choice: $ => choice(
@@ -554,31 +587,14 @@ export default grammar({
       ),
     ),
 
-    _tag_key_value: $ => seq(
-      field('key', alias(nim(reTagKey), $.key)),
-      alias(nim(/[.:=]/), 'tag_delimiter'),
-      field('value', alias($._tag_value, $.value)),
-    ),
-
     _tag_line_key_value: $ => seq(
       field('key', alias(nim(reTagKey), $.key)),
       alias(nim(/[.:=]/), 'tag_delimiter'),
       field('value', alias($._tag_line_value, $.value)),
     ),
 
-    // A value word may not START with a closing bracket: otherwise ` ]` ties
-    // with the bracket-only closer of line_tag and the word wins the lexer tie.
-    //
-    // Multi-line value (tag heads that may span lines): words may be split
-    // across lines. The separator is _tag_value_nl, never _tag_nl, so a
-    // newline before the closer stays unambiguous (see externals).
-    _tag_value: $ => seq(
-      tag_word(',;', ']})>'),
-      repeat(seq(optional($._tag_value_nl), tag_word(',;', ']})>'))),
-    ),
-
     // Single-line value, for scope_line_tag (table cells).
-    _tag_line_value: $ => repeat1(tag_word(',;', ']})>')),
+    _tag_line_value: $ => repeat1(tag_word(',;')),
 
     _expr_line: $ => repeat1($.expr),
 
@@ -622,24 +638,17 @@ export default grammar({
   }
 });
 
-// Closing marker of a tag. Either whitespace followed by the closer on the same
-// line (` #]`), or, for multi-line tags, one or more newlines (the external
-// _tag_nl already consumes the indentation) followed by the bare closer.
-function tag_close($, spaced, bare) {
+// End of the head of a tag, scanned against its opening (see `_head_end`):
+// after a blank, or, for a multi-line head, on a line of its own after the
+// line breaks (the external _tag_nl already consumes the indentation).
+function head_close($) {
   return choice(
-    field('tag_closure', alias(spaced, $.tag_end)),
+    field('tag_closure', alias($._head_end, $.tag_end)),
     seq(
       repeat1($._tag_nl),
-      field('tag_closure', alias(bare, $.tag_end)),
+      field('tag_closure', alias($._head_end_bare, $.tag_end)),
     ),
   );
-}
-
-// Closer token for the line after a _tag_nl, which has already consumed the
-// newline and indentation. It is a separate token from ordinary value
-// symbols (like `]`) so the parser can tell "closer" from "value".
-function bare_end(...parts) {
-  return token.immediate(prec('special', parts.length === 1 ? parts[0] : seq(...parts)));
 }
 
 // Closer token that must be preceded by at least one space/tab.
